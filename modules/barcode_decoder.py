@@ -231,7 +231,7 @@ class BarcodeDecoder:
         variants = {"original": img}
         if color == "Azul":
             imgAzul = self.procesar_codigo_barras_azul(img)
-            variants = {"azul": imgAzul}
+            variants["azul"] = imgAzul
             # log
             #cv2.imwrite(str(output_dir / f"variant_azul_{i}.png"), img)
         else:
