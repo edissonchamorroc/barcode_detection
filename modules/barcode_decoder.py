@@ -226,7 +226,7 @@ class BarcodeDecoder:
         """
         output_dir = Path(OUTPUT_DIR)
         output_dir.mkdir(parents=True, exist_ok=True)
-        
+        variants = {}
         color = self.detectar_color_codigo(img)
 
         if color == "Azul":
@@ -238,8 +238,7 @@ class BarcodeDecoder:
             img = self._to_gray(img)
 
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            variants["clahe"] = clahe.apply(img)
-            clahe_img = variants["clahe"]
+            clahe_img = clahe.apply(img)
             _, otsu_on_clahe = cv2.threshold(
                 clahe_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
             )
