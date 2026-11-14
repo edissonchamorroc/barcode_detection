@@ -32,9 +32,7 @@ class SwinCharOCRDecoder:
         
         roi_start = int(h * (1.0 - bottom_ratio))
         roi = image[roi_start:h, :w]
-        #log 
-        #cv2.imwrite(str(output_dir / f"roi_{x1}_{new_y1}_{x2}_{y2}.png"), roi)
-        
+       
         if roi.size == 0:
             return None
         output_dir.mkdir(parents=True, exist_ok=True)
