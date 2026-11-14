@@ -14,7 +14,7 @@ import torch  # PyTorch: tensores y redes neuronales.
 # --- Configuración ---
 # Rutas a los archivos de entrada. Si cambias de imagen o de pesos,
 # edita estas líneas.
-IMAGE_PATH = "dataset_sintetico/images/test/images/20261111_135545_heic.rf.21211f333b4197ea90d39506a9cdab97.jpg"
+IMAGE_PATH = "dataset_prepared/yolo/images/test/prueba4.jpg"
 SWIN_WEIGHTS = "runs/swin_fcos/best.pt"
 YOLO_WEIGHTS = "runs/detect/runs/barcode/yolov5s_base/weights/best.pt"
 CBAM_WEIGHTS = "runs/detect/runs/barcode/yolov5s_cbam/weights/best.pt"
@@ -485,7 +485,7 @@ def main_image():
         # pequeños.
         crop_hires = img[exp_y1:exp_y2, exp_x1:exp_x2]
         #log
-        #cv2.imwrite(str(output_dir / f"crop_hires_{i}.png"), crop_hires)
+        cv2.imwrite(str(output_dir / f"crop_hires_{i}.png"), crop_hires)
 
         # ---- Intento 1: decodificar el crop nativo ----
         hits = decoder.decode(crop_hires, i=i)
