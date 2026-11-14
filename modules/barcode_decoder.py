@@ -228,23 +228,22 @@ class BarcodeDecoder:
         output_dir.mkdir(parents=True, exist_ok=True)
         variants = {}
         color = self.detectar_color_codigo(img)
-
+        variants = {"original": img}
         if color == "Azul":
-            img = self.procesar_codigo_barras_azul(img)
-            variants = {"azul": img}
+            imgAzul = self.procesar_codigo_barras_azul(img)
+            variants = {"azul": imgAzul}
             # log
-            cv2.imwrite(str(output_dir / f"variant_azul_{i}.png"), img)
+            #cv2.imwrite(str(output_dir / f"variant_azul_{i}.png"), img)
         else:
-            img = self._to_gray(img)
-
+            imgBlanco = self._to_gray(img)
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            clahe_img = clahe.apply(img)
+            clahe_img = clahe.apply(imgBlanco)
             _, otsu_on_clahe = cv2.threshold(
                 clahe_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
             )
             variants["clahe+otsu"] = otsu_on_clahe
             # log
-            cv2.imwrite(str(output_dir / f"variant_clahe+otsu_{i}.png"), otsu_on_clahe)
+            #cv2.imwrite(str(output_dir / f"variant_clahe+otsu_{i}.png"), otsu_on_clahe)
 
         return variants
 
@@ -255,7 +254,7 @@ class BarcodeDecoder:
         self,
         image: np.ndarray,
         i: int = 0,
-    ) -> List[Dict]:
+    ) -> Tuple[List[Dict], Dict[str, np.ndarray]]:
         """
         Decodifica un código de barras en la imagen o en un crop específico.
 
@@ -263,8 +262,9 @@ class BarcodeDecoder:
             image: imagen HWC (BGR, típicamente de cv2) o HW (gray).
 
         Returns:
-            Lista de dicts con la decodificación, ordenados por calidad descendente.
-            Vacía si no se pudo decodificar.
+            Tupla con las lecturas decodificadas, ordenadas por calidad descendente,
+            y las variantes de imagen generadas. La lista de lecturas queda vacía
+            si no se pudo decodificar.
         """
         # detecta color
         #color = self.detectar_color_codigo(image)
@@ -331,4 +331,4 @@ class BarcodeDecoder:
         # `reverse=True` = descendente.
         unique.sort(key=lambda x: x["quality"], reverse=True)
 
-        return unique
+        return unique , variants
