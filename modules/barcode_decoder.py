@@ -66,7 +66,7 @@ class BarcodeDecoder:
         quiet_zone_ratio: float = 0.30,  # Cuánto margen blanco añadir (30%)
         min_quality: float = 15.0,  # Calidad mínima para aceptar lectura
     ):
-      
+
         self.min_crop_size = min_crop_size
         self.upscale_factor = upscale_factor
         self.quiet_zone_ratio = quiet_zone_ratio
@@ -80,6 +80,49 @@ class BarcodeDecoder:
     # UTILIDADES DE IMAGEN
     # Funciones pequeñas que se usarán en varios sitios.
     # ==================================================================
+
+
+    def detectar_color_codigo(self, img: np.ndarray):
+        """
+        Determina si el ROI del código de barras es predominantemente azul, verde u otro.
+        """
+        # 1. Convertir la imagen de BGR (OpenCV) a HSV
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+        # 2. Definir los rangos de color
+        # Rango para el AZUL
+        lower_blue = np.array([100, 50, 50])
+        upper_blue = np.array([130, 255, 255])
+
+        # Rango para el VERDE
+        lower_green = np.array([40, 50, 50])
+        upper_green = np.array([80, 255, 255])
+
+        # 3. Crear máscaras (imágenes en blanco y negro donde el color seleccionado es blanco)
+        mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
+        mask_green = cv2.inRange(hsv, lower_green, upper_green)
+
+        # 4. Contar cuántos píxeles son de cada color
+        total_pixeles = img.shape[0] * img.shape[1]
+        pixeles_azules = cv2.countNonZero(mask_blue)
+        pixeles_verdes = cv2.countNonZero(mask_green)
+
+        # 5. Calcular porcentajes
+        porcentaje_azul = (pixeles_azules / total_pixeles) * 100
+        porcentaje_verde = (pixeles_verdes / total_pixeles) * 100
+
+        print(f"Porcentaje Azul: {porcentaje_azul:.2f}% | Porcentaje Verde: {porcentaje_verde:.2f}%")
+
+        # 6. Tomar una decisión (umbral del 15% de la imagen)
+        umbral = 15.0 
+        
+        if porcentaje_azul > umbral and porcentaje_azul > porcentaje_verde:
+            return "Azul"
+        elif porcentaje_verde > umbral and porcentaje_verde > porcentaje_azul:
+            return "Verde"
+        else:
+            return "blanco"
+
 
     # `@staticmethod` significa "esta función no necesita acceder a `self`".
     # Es una utilidad genérica que podría existir fuera de la clase.
@@ -121,36 +164,88 @@ class BarcodeDecoder:
             img, pad_y, pad_y, pad_x, pad_x, cv2.BORDER_CONSTANT, value=(255, 255, 255)
         )
 
-
     # ==================================================================
     # PREPROCESAMIENTOS
     # Aquí generamos varias "versiones" de la misma imagen, cada una con
     # un filtro distinto. La idea: si una versión no funciona, quizá otra
     # sí. Es como probar varias recetas hasta que una sale bien.
     # ==================================================================
-    def _preprocess_variants(self, gray: np.ndarray, i: int) -> Dict[str, np.ndarray]:
+
+    def procesar_codigo_barras_azul(self, imagen_roi: np.ndarray) -> np.ndarray:
         """
-        Devuelve primero la imagen original y luego variantes de mejora.
+        Recibe el recorte de la imagen y devuelve una versión con fondo blanco 
+        y barras negras perfectamente definidas.
+        """
+        #  Convertir a espacio de color HSV
+        hsv = cv2.cvtColor(imagen_roi, cv2.COLOR_BGR2HSV)
+
+        #  Definir el rango del color AZUL 
+        lower_blue = np.array([90, 50, 50])
+        upper_blue = np.array([130, 255, 255])
+
+        #  Crear la máscara: El fondo azul será blanco, lo demás negro
+        mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
+
+        # Encontrar el contorno más grande (la etiqueta azul)
+        contornos, _ = cv2.findContours(mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if not contornos:
+            return None, "No se encontró área azul"
+        
+        # Asumimos que el contorno más grande es la etiqueta
+        c = max(contornos, key=cv2.contourArea)
+        x, y, w, h = cv2.boundingRect(c)
+
+        # (Esto elimina el fondo de cartón ruidoso)
+        roi = imagen_roi[y:y+h, x:x+w]
+        
+        # Convertimos el recorte a HSV de nuevo
+        hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+        # Extraemos SOLO el canal V (Value / Brillo)
+        # En este canal, el azul se ve claro y el texto negro se ve oscuro.
+        canal_v = hsv_roi[:, :, 2]
+
+        # Aplicar Umbralización de Otsu
+        # Invertimos el resultado para que las letras/barras queden NEGRAS y el fondo BLANCO
+        _, binaria_inv = cv2.threshold(canal_v, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+        # Invertimos el resultado final para que las barras/texto sean NEGROS y el fondo BLANCO
+        resultado_final = cv2.bitwise_not(binaria_inv)
+        
+        # Limpieza morfológica para hacer las barras más nítidas
+        # Si las barras se ven rotas, puedes usar una operación de cierre.
+        kernel = np.ones((2,2), np.uint8)
+        binaria_limpia = cv2.morphologyEx(resultado_final, cv2.MORPH_CLOSE, kernel)
+
+        return binaria_limpia
+
+    def _preprocess_variants(self, img: np.ndarray, i: int) -> Dict[str, np.ndarray]:
+        """
+        Devuelve variantes de mejora.
         """
         output_dir = Path(OUTPUT_DIR)
+        output_dir.mkdir(parents=True, exist_ok=True)
         
-        variants = {"original": gray}
-        #log
-        cv2.imwrite(str(output_dir / f"variant_original_{i}.png"), gray)
-     
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        variants["clahe"] = clahe.apply(gray)
-        #log
-        cv2.imwrite(str(output_dir / f"variant_clahe_{i}.png"), clahe)
+        color = self.detectar_color_codigo(img)
 
-        
-        clahe_img = variants["clahe"]
-        _, otsu_on_clahe = cv2.threshold(
-            clahe_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )
-        variants["clahe+otsu"] = otsu_on_clahe
-        #log
-        cv2.imwrite(str(output_dir / f"variant_clahe+otsu_{i}.png"), otsu_on_clahe)
+        if color == "Azul":
+            img = self.procesar_codigo_barras_azul(img)
+            variants = {"azul": img}
+            # log
+            cv2.imwrite(str(output_dir / f"variant_azul_{i}.png"), img)
+        else:
+            img = self._to_gray(img)
+
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            variants["clahe"] = clahe.apply(img)
+            clahe_img = variants["clahe"]
+            _, otsu_on_clahe = cv2.threshold(
+                clahe_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            )
+            variants["clahe+otsu"] = otsu_on_clahe
+            # log
+            cv2.imwrite(str(output_dir / f"variant_clahe+otsu_{i}.png"), otsu_on_clahe)
 
         return variants
 
@@ -167,29 +262,59 @@ class BarcodeDecoder:
 
         Args:
             image: imagen HWC (BGR, típicamente de cv2) o HW (gray).
-            return_attempts: si True, adjunta la lista de (variante, ángulo, hit).
 
         Returns:
             Lista de dicts con la decodificación, ordenados por calidad descendente.
             Vacía si no se pudo decodificar.
         """
-
+        # detecta color
+        #color = self.detectar_color_codigo(image)
         # ----  Convertir a gris ----
-        gray = self._to_gray(image)
+        #gray = self._to_gray(image)
 
         # ---- Generar variantes preprocesadas ----
-        variants = self._preprocess_variants(gray, i)
+        variants = self._preprocess_variants(image, i)
 
         # ----  Probar primero cada variante sin modificar ----
         all_hits: List[Dict] = []  # lecturas válidas acumuladas
-        attempts: List[Dict] = []  # registro de intentos (para depurar)
 
         for name, img in variants.items():
-            candidates = [
-                (name, img),
-                (f"{name}+quiet_zone", self._add_quiet_zone(img)),
-            ]
-            
+            try:
+                results = zxingcpp.read_barcodes(img)
+            except Exception:
+                LOGGER.exception(
+                    "ZXing falló con la variante %s (forma %s, tipo %s)",
+                    name,
+                    img.shape,
+                    img.dtype,
+                )
+                continue
+
+            for result in results:
+                if not result.text:
+                    continue
+                all_hits.append(
+                    {
+                        "data": result.text,
+                        "type": result.format.name,
+                        "quality": 100.0,
+                        "rect": {
+                            "left": 0,
+                            "top": 0,
+                            "width": 0,
+                            "height": 0,
+                        },
+                        "polygon": [],
+                    }
+                )
+                if all_hits:
+                    LOGGER.debug(
+                        "ZXing encontró %d código(s) usando la variante %s",
+                        len(all_hits),
+                        name,
+                    )
+                    break
+
             if all_hits:
                 break
 
