@@ -257,12 +257,12 @@ class BarcodeDecoder:
 
         variants = {"original": aligned}
         #log
-        #cv2.imwrite(str(output_dir / f"variant_original_{i}.png"), aligned)
+        cv2.imwrite(str(output_dir / f"variant_original_{i}.png"), aligned)
      
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         variants["clahe"] = clahe.apply(aligned)
         #log
-        #cv2.imwrite(str(output_dir / f"variant_aligned_{i}.png"), aligned)
+        cv2.imwrite(str(output_dir / f"variant_aligned_{i}.png"), aligned)
 
         
         clahe_img = variants["clahe"]
@@ -271,7 +271,7 @@ class BarcodeDecoder:
         )
         variants["clahe+otsu"] = otsu_on_clahe
         #log
-        #cv2.imwrite(str(output_dir / f"variant_clahe+otsu_{i}.png"), otsu_on_clahe)
+        cv2.imwrite(str(output_dir / f"variant_clahe+otsu_{i}.png"), otsu_on_clahe)
 
         return variants
 

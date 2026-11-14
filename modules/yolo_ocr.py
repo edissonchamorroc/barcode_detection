@@ -105,15 +105,16 @@ class SwinCharOCRDecoder:
             ch, cw = char_crop.shape[:2]
             if ch < 32 or cw < 32:
                 char_crop = cv2.resize(char_crop, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-            #log
+            
             char_crop_gray = cv2.cvtColor(char_crop, cv2.COLOR_BGR2GRAY)
             char_crop_clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(char_crop_gray)
             char_crop_otsu = cv2.threshold(char_crop_clahe, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
             char_crop_path = output_dir / (
                 f"char_yolo{yolo_conf:.2f}_region_{region_id:04d}_idx{idx}.png"
             )
-            if not cv2.imwrite(str(char_crop_path), char_crop_otsu):
-                raise OSError(f"No se pudo guardar el recorte: {char_crop_path}")
+            #log
+            #if not cv2.imwrite(str(char_crop_path), char_crop_otsu):
+            #    raise OSError(f"No se pudo guardar el recorte: {char_crop_path}")
             
             # 2. Inferencia con PaddleOCR v3.x
             # El método predict devuelve una lista de diccionarios con los resultados
