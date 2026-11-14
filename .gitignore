@@ -1,0 +1,23 @@
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# Resultados generados de pruebas en cascada
+test_cascade/
+test_cascade_out/
+
+# Cache y archivos temporales de Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.coverage
+.coverage.*
+htmlcov/
+
+# Archivos de espacio de trabajo de VS Code
+*.code-workspace
