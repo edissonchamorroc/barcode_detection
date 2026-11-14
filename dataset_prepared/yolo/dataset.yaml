@@ -1,0 +1,8 @@
+# Dataset de códigos de barras (auto-generado)
+path: C:\Users\marce\Documents\Edisson\UdeA\vision_logistica\dataset_prepared\yolo
+train: images/train
+val: images/val
+
+nc: 1
+names:
+  0: barcode

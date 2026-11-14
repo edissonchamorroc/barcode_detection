@@ -1,0 +1,191 @@
+ARQUITECTURA ACTUAL DEL PROYECTO - VISION LOGISTICA
+==================================================
+
+1. OBJETIVO GENERAL
+-------------------
+El proyecto está orientado a la visión por computadora aplicada a la lectura de códigos de barras, etiquetas y texto en imágenes o videos de entorno logístico. La arquitectura actual usa una pipeline en cascada basada en detección de regiones de interés (ROI) y refinamiento de cajas para luego decodificar el contenido visual.
+
+2. ARQUITECTURA DE LA SOLUCION
+------------------------------
+La solución actual se compone en varias etapas:
+
+A. ENTRADA DEL SISTEMA
+- Imágenes estáticas: dataset_prepared/ o archivos locales como video.mp4, dataset_prepared/yolo/images/val/...
+- Videos o cámara: soportados por test_pipeline.py
+
+B. ETAPA 1: PROPUESTA DE REGIONES DE INTERES (ROI)
+- Módulo principal: modules/swin_transformer.py
+- Clase: SwinROIProposer
+- Función: detecta regiones potencialmente relevantes dentro de la imagen.
+- Salida: cajas de propuestas con scores.
+- Archivo ejecutor: pipeline.py, test_pipeline.py
+
+C. ETAPA 2: REFINAMIENTO DE DETECCIONES
+- Módulo principal: modules/yolo_cbam.py
+- Clase: YOLOv5CBAMRefiner
+- Función: refina y filtra las propuestas generadas por Swin usando detección con YOLO + mecanismos CBAM.
+- Salida: cajas más precisas que encajan mejor con la región del código o texto.
+
+D. ETAPA 3: DECODIFICACION / LECTURA
+- Módulo principal: modules/barcode_decoder.py
+- Clase: BarcodeDecoder
+- Función: procesa cada crop, aplica rectificación/preprocesamiento, intenta decodificar códigos de barras mediante zxingcpp, con rotaciones y variantes de preprocesamiento.
+- También puede usar apoyo de preprocesador y segmentación SAM para mejorar la lectura.
+
+E. ETAPA 4 (OPCIONAL): SEGMENTACION AVANZADA
+- Archivo: modules/sam_segmentation.py (si existe en la implementación efectiva)
+- Función: segmentar el objeto antes de decodificar para aislar mejor el código de la etiqueta.
+- Se usa como mejora en la pipeline cuando está habilitada.
+
+F. SALIDA Y VISUALIZACION
+- Se generan imágenes con cajas dibujadas por etapa.
+- Se extraen resultados como decoded, source_box, score, etc.
+- El script test_pipeline.py exporta imágenes y videos anotados en test_cascade_out/.
+
+3. FLUJO TÍPICO DEL PIPELINE
+----------------------------
+1. Se carga la imagen o frame.
+2. Se redimensiona y normaliza para Swin.
+3. Swin propone ROIs con confianza.
+4. YOLO-CBAM refina esas ROIs y elimina falsas detecciones.
+5. Se extraen crops de cada caja detectada.
+6. Se preprocesan los crops (rotaciones, escalado, quiet zone, grayscale, thresholding, CLAHE, etc.).
+7. Se intenta decodificar con BarcodeDecoder.
+8. Si falla, se usa preprocesamiento adicional o segmentación SAM.
+9. Se devuelve el texto decodificado y se dibuja en la salida.
+
+4. ARCHIVO PRINCIPALES DEL PROYECTO
+-----------------------------------
+Raíz del proyecto:
+- pipeline.py
+- test_pipeline.py
+- generate_synthetic_data.py
+- train_swim_fcos.py
+- train_yolo_cbam.py
+- train_yolo_ocr.py
+- mobile_sam.pt
+- video.mp4
+- video_resultado.mp4
+- dataset_prepared/
+- dataset_sintetico/
+- modules/
+- runs/
+- test_cascade_out/
+- venv/
+
+5. ESTRUCTURA DE CARPETAS
+------------------------
+vision_logistica/
+├── pipeline.py
+├── test_pipeline.py
+├── generate_synthetic_data.py
+├── train_swim_fcos.py
+├── train_yolo_cbam.py
+├── train_yolo_ocr.py
+├── mobile_sam.pt
+├── video.mp4
+├── video_resultado.mp4
+├── arquitectura_proyecto.txt
+│
+├── modules/
+│   ├── barcode_decoder.py
+│   ├── fcos_losses.py
+│   ├── swin_transformer.py
+│   ├── yolo_cbam.py
+│   ├── yolo_ocr.py
+│   └── (otras utilidades o dependencias del pipeline)
+│
+├── dataset_prepared/
+│   ├── dataset_report.json
+│   └── coco/
+│       ├── train/
+│       │   ├── annotations.json
+│       │   └── images/
+│       └── val/
+│           ├── annotations.json
+│           └── images/
+│
+│   └── yolo/
+│       ├── dataset.yaml
+│       ├── images/
+│       │   ├── train/
+│       │   └── val/
+│       └── labels/
+│           ├── train.cache
+│           └── val.cache
+│
+├── dataset_sintetico/
+│   ├── images/
+│   │   └── train/
+│   │       └── img_00000.jpg ...
+│   └── labels/
+│       └── train/
+│
+├── runs/
+│   ├── detect/
+│   │   └── runs/
+│   ├── espcn_x4/
+│   │   └── ESPCN_x4.pb
+│   ├── swin_fcos/
+│   │   └── best.pt
+│   └── ...
+│
+├── test_cascade_out/
+│   ├── 00_comparativa.png
+│   ├── 01_swin.png
+│   ├── 02_yolo.png
+│   ├── 03_decoded.png
+│   ├── crop_hires_0.png
+│   ├── crop_hires_1.png
+│   ├── variant_clahe_0.png
+│   ├── variant_clahe_1.png
+│   ├── variant_original_0.png
+│   ├── variant_original_1.png
+│   └── ...
+│
+└── venv/
+    └── entorno virtual Python del proyecto
+
+6. FUNCION DE LOS SCRIPT PRINCIPALES
+-----------------------------------
+- pipeline.py
+  Ejecuta la pipeline completa sobre una imagen y muestra resultados por etapas.
+
+- test_pipeline.py
+  Versión más completa para pruebas sobre imagen, video o cámara con visualización y salida anotada.
+
+- generate_synthetic_data.py
+  Genera imágenes sintéticas con texto alfanumérico para entrenar detectores o decodificadores.
+
+- train_swim_fcos.py
+  Entrena un detector basado en Swin + FCOS para proponer ROIs.
+
+- train_yolo_cbam.py
+  Entrena un modelo YOLO con CBAM para refinar detecciones.
+
+- train_yolo_ocr.py
+  Entrena un detectador tipo YOLO para reconocer caracteres o texto por región.
+
+- modules/barcode_decoder.py
+  Módulo central de decodificación de códigos.
+
+- modules/swin_transformer.py
+  Implementación de Swin Transformer para detección de regiones.
+
+- modules/yolo_cbam.py
+  Wrapper o modelo YOLO v5 con CBAM para refinamiento de detecciones.
+
+7. OBSERVACIONES DE ARQUITECTURA
+---------------------------------
+La arquitectura actual no es un único modelo monolítico, sino una pipeline multimodular:
+- Swin propone candidatos.
+- YOLO refina detecciones.
+- El decodificador extrae información final.
+- El sistema está diseñado para ser robusto a ruido, baja resolución, deformaciones y rotaciones.
+- Hay una fuerte dependencia de datos sintéticos y artefactos de entrenamiento almacenados en runs/.
+
+8. CONCLUSION
+-------------
+El proyecto está estructurado como un sistema de visión industrial en cascada, orientado a lectura automática de etiquetas/códigos de barras en imágenes logísticas. La organización de carpetas refleja un flujo claro de entrenamiento, validación, inferencia, y resultados visuales.
+
+Fin del archivo.
