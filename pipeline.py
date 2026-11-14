@@ -215,7 +215,7 @@ def process_video_frame(img, frame_number, swin, refiner, decoder, ocr_fallback)
                 max(0, int(y1) - margin_y) : min(h, int(y2) + margin_y),
                 max(0, int(x1) - margin_x) : min(w, int(x2) + margin_x),
             ]
-            hits = decoder.decode(crop, i=i)
+            hits, _variants = decoder.decode(crop, i=i)
             decoded_text = hits[0]["data"] if hits else None
             if decoded_text is None:
                 ocr_result = ocr_fallback.process_barcode_region(
@@ -480,55 +480,48 @@ def main_image():
         cv2.imwrite(str(output_dir / f"crop_hires_{i}.png"), crop_hires)
 
         # ---- Intento 1: decodificar el crop nativo ----
-        hits = decoder.decode(crop_hires, i=i)
-
-        # Preparar el dict de resultado (con o sin decode).
-        res_dict = {
-            "source_box": r["box"],
-            "score": r["score"],
-            "swin_score": r["swin_score"],
-            "decoded": None,
-            "type": None,
-            "quality": 0.0,
-            "method": None,
-        }
+        hits, variants = decoder.decode(crop_hires, i=i)
+        decoded_text = hits[0]["data"] if hits else None
 
         if hits:
             # ---- Éxito directo ----
-            best = hits[0]  # hits viene ordenado por calidad; [0] = mejor.
-            res_dict["decoded"] = best["data"]
-            res_dict["type"] = best["type"]
-            res_dict["quality"] = best["quality"]
-            res_dict["method"] = f"zxingcpp:{best.get('_variant', 'original')}"
             n_ok += 1
-            print(
-                f"  [{i}] ✓ {res_dict['decoded']!r} ({res_dict['type']}, "
-                f"{res_dict['method']})"
-            )
+            print(f"  [{i}] ✓ Código decodificado: {decoded_text!r}")
         else:
             # --- FALLBACK: INTENTO CON OCR ---
             print(f"  [{i}] ✗ Código de barras falló. Intentando OCR...")
 
-            # Llamamos a la función de tu yolo_ocr.py
-            ocr_res = ocr_fallback.process_barcode_region(
-                image=crop_hires
-            )
+            for variant_name, variant_image in variants.items():
+                if variant_image.ndim == 2:
+                    variant_image = cv2.cvtColor(
+                        variant_image, cv2.COLOR_GRAY2BGR
+                    )
 
-            if ocr_res and ocr_res["texto"]:
-                # --- ÉXITO CON OCR ---
-                res_dict["decoded"] = ocr_res["texto"]
-                res_dict["type"] = "OCR_Text"
-                res_dict["quality"] = 1.0  # Confianza simulada para el OCR
-                res_dict["method"] = "ocr"
-                n_ok += 1
-                n_ocr_fallback += 1
-                print(
-                    f"  [{i}] ✓ OCR: {res_dict['decoded']!r} ({ocr_res['num_caracteres']} chars)"
+                print(f"  Probando OCR con la variante {variant_name}...")
+                ocr_res = ocr_fallback.process_barcode_region(
+                    image=variant_image
                 )
-            else:
-                print(f"  [{i}] ✗ Decodificador tradicional y OCR fallaron.")
 
-        decoded.append(res_dict)
+                if (
+                    ocr_res
+                    and ocr_res["texto"]
+                    and ocr_res["num_caracteres"] >= 10
+                ):
+                    decoded_text = ocr_res["texto"]
+                    n_ok += 1
+                    n_ocr_fallback += 1
+                    print(f"  [{i}] ✓ OCR ({variant_name}): {decoded_text!r}")
+                    break
+            else:
+                print(f"  [{i}] ✗ Decodificador y OCR fallaron.")
+
+        decoded.append(
+            {
+                "decoded": decoded_text,
+                "hits": hits,
+                "variants": variants,
+            }
+        )
         print(f"Decodificadas exitosamente: {n_ok}/{len(decoded)}")
         print(f"  (De las cuales {n_ocr_fallback} fueron rescatadas por OCR)")
 
@@ -536,7 +529,7 @@ def main_image():
     print(f"Decodificadas: {n_ok}/{len(decoded)}")
     for i, r in enumerate(decoded):
         if r["decoded"]:
-            print(f"  [{i}] ✓ {r['decoded']!r} ({r['type']}, q={r['quality']:.0f})")
+            print(f"  [{i}] ✓ {r['decoded']!r}")
         else:
             print(f"  [{i}] ✗ no decode")
 
