@@ -85,12 +85,6 @@ class BarcodeDecoder:
     # Es una utilidad genérica que podría existir fuera de la clase.
     @staticmethod
     def _to_gray(img: np.ndarray) -> np.ndarray:
-        """
-        Convierte una imagen a escala de grises (blanco y negro).
-        ¿Por qué? Porque leer un código de barras solo depende de las
-        diferencias de intensidad (claro/oscuro), no del color.
-        Además, trabajar en gris es 3 veces más rápido que en color.
-        """
         # `img.shape` nos dice el tamaño de la imagen.
         # Si tiene 2 dimensiones → ya es gris, la devolvemos tal cual.
         if len(img.shape) == 2:
@@ -128,120 +122,6 @@ class BarcodeDecoder:
         )
 
 
-    def alinear_y_rotar_barras(self, image_to_align: np.ndarray) -> np.ndarray:
-        """
-        Detecta de manera robusta el ángulo de inclinación de un código de barras
-        directamente desde la imagen original (color o escala de grises),
-        aplica la transformada de Hough adaptativa y retorna la imagen rotada.
-        """
-        # 1. Convertir la imagen a escala de grises
-        if len(image_to_align.shape) == 3:
-            gray = cv2.cvtColor(image_to_align, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = image_to_align.copy()
-
-        # 2. Aplicar un CLAHE de alta intensidad para resaltar bordes verticales
-        clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
-        enhanced_gray = clahe.apply(gray)
-
-        # 3. Detectar bordes de manera limpia
-        edges = cv2.Canny(enhanced_gray, 50, 150, apertureSize=3)
-
-        # 4. Transformada de Hough adaptativa
-        hough_threshold = 150
-        lines = None
-        while hough_threshold >= 30:
-            lines = cv2.HoughLines(edges, 1, np.pi / 180, threshold=hough_threshold)
-            if lines is not None and len(lines) >= 8:
-                break
-            hough_threshold -= 15
-
-        angles = []
-        if lines is not None and len(lines) > 0:
-            for line in lines:
-                rho, theta = line[0]
-                angle_deg = np.rad2deg(theta)
-
-                # Orientar el ángulo respecto a la vertical (0 o 180 grados)
-                if angle_deg > 90:
-                    angle_deg -= 180
-
-                # Filtrar: solo nos interesan componentes predominantemente verticales
-                if abs(angle_deg) < 45:
-                    angles.append(angle_deg)
-
-            if len(angles) > 0:
-                angulo_desviacion = np.median(angles)
-            else:
-                angulo_desviacion = 0.0
-        else:
-            angulo_desviacion = 0.0
-
-        print(
-            f"[Alineación] Desviación detectada: {angulo_desviacion:.2f} grados (usando umbral Hough: {max(hough_threshold, 30)})"
-        )
-
-        # 5. Rotar la imagen usando el centro geométrico
-        h, w = gray.shape[:2]
-        centro = (w // 2, h // 2)
-        M = cv2.getRotationMatrix2D(centro, angulo_desviacion, 1.0)
-
-        # Aplicar la matriz afín con fondo blanco (255) para preservar el área externa limpia
-        img_rotada = cv2.warpAffine(
-            image_to_align,
-            M,
-            (w, h),
-            flags=cv2.INTER_CUBIC,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=(255, 255, 255) if len(image_to_align.shape) == 3 else 255,
-        )
-
-        return img_rotada
-
-   
-    @staticmethod
-    def _rotate(img: np.ndarray, angle: int) -> np.ndarray:
-        """
-        Rota sin recortar (expande el canvas para no perder esquinas).
-
-        ¿Por qué? Un código puede estar fotografiado torcido. El lector
-        a veces solo lo reconoce si está perfectamente horizontal o
-        vertical. Rotando probamos varias orientaciones.
-        """
-        # Si el ángulo es 0, no hay nada que hacer.
-        if angle == 0:
-            return img
-
-        # Centro de la imagen (alrededor del cual giraremos).
-        h, w = img.shape[:2]
-        center = (w / 2, h / 2)
-
-        # `getRotationMatrix2D` construye la "receta matemática" para rotar.
-        # El 1.0 es la escala (no ampliar ni reducir).
-        M = cv2.getRotationMatrix2D(center, angle, 1.0)
-
-        # Cuando rotas un rectángulo, las esquinas "se salen".
-        # Calculamos el nuevo tamaño para que quepan todas.
-        cos, sin = abs(M[0, 0]), abs(M[0, 1])
-        new_w = int(h * sin + w * cos)
-        new_h = int(h * cos + w * sin)
-
-        # Ajustamos la matriz para centrar la imagen en el nuevo lienzo.
-        M[0, 2] += (new_w / 2) - center[0]
-        M[1, 2] += (new_h / 2) - center[1]
-
-        # `warpAffine` aplica la rotación. BORDER_CONSTANT + blanco = los
-        # huecos que aparecen por la rotación se rellenan de blanco (no
-        # de negro, que confundiría al lector).
-        return cv2.warpAffine(
-            img,
-            M,
-            (new_w, new_h),
-            flags=cv2.INTER_CUBIC,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=(255, 255, 255),
-        )
-
     # ==================================================================
     # PREPROCESAMIENTOS
     # Aquí generamos varias "versiones" de la misma imagen, cada una con
@@ -253,16 +133,15 @@ class BarcodeDecoder:
         Devuelve primero la imagen original y luego variantes de mejora.
         """
         output_dir = Path(OUTPUT_DIR)
-        aligned = self.alinear_y_rotar_barras(gray)
-
-        variants = {"original": aligned}
+        
+        variants = {"original": gray}
         #log
-        cv2.imwrite(str(output_dir / f"variant_original_{i}.png"), aligned)
+        cv2.imwrite(str(output_dir / f"variant_original_{i}.png"), gray)
      
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        variants["clahe"] = clahe.apply(aligned)
+        variants["clahe"] = clahe.apply(gray)
         #log
-        cv2.imwrite(str(output_dir / f"variant_aligned_{i}.png"), aligned)
+        cv2.imwrite(str(output_dir / f"variant_clahe_{i}.png"), clahe)
 
         
         clahe_img = variants["clahe"]
@@ -278,49 +157,6 @@ class BarcodeDecoder:
     # ==================================================================
     # DECODIFICACIÓN PRINCIPAL
     # ==================================================================
-    def _try_decode_single(self, img: np.ndarray) -> List[Dict]:
-        """
-        Corre zxing-cpp sobre una imagen (gray o binarizada).
-        Devuelve una lista de lecturas encontradas en esa imagen.
-        """
-        # try/except: "intenta esto, y si falla, no rompas el programa".
-        # zxingcpp puede lanzar excepciones si la imagen es rara.
-        try:
-            # Aquí está la "magia": entregamos la imagen al lector y él
-            # devuelve una lista de códigos encontrados.
-            results = zxingcpp.read_barcodes(img)
-        except Exception:
-            LOGGER.exception(
-                "ZXing falló al procesar una imagen de forma %s y tipo %s",
-                img.shape,
-                img.dtype,
-            )
-            return []
-
-        out = []
-        for r in results:
-            # `r.format.name` es el tipo de código (CODE128, QR_CODE, ...)
-            symbology = r.format.name
-
-            # Si el usuario solo quiere ciertos formatos y este no está,
-            # lo ignoramos.
-            if not self._format_allowed(symbology.upper()):
-                continue
-
-            # Construimos un diccionario con la info que devolveremos.
-            # `quality` fijo a 100.0 porque zxing no nos da un score
-            # directo; el filtro real se hace con min_quality aguas abajo.
-            out.append(
-                {
-                    "data": r.text,  # el texto del código
-                    "type": symbology,  # el tipo (CODE128, EAN13...)
-                    "quality": 100.0,  # calidad reportada (fija)
-                    "rect": {"left": 0, "top": 0, "width": 0, "height": 0},
-                    "polygon": [],  # coordenadas del código (no usadas)
-                }
-            )
-        return out
-
     def decode(
         self,
         image: np.ndarray,
