@@ -219,15 +219,7 @@ def process_video_frame(img, frame_number, swin, refiner, decoder, ocr_fallback)
             decoded_text = hits[0]["data"] if hits else None
             if decoded_text is None:
                 ocr_result = ocr_fallback.process_barcode_region(
-                    image=img,
-                    swin_bbox=[
-                        max(0, int(x1) - margin_x),
-                        max(0, int(y1) - margin_y),
-                        min(w, int(x2) + margin_x),
-                        min(h, int(y2) + margin_y),
-                    ],
-                    swin_conf=result["score"],
-                    swin_class=1,
+                    image=img
                 )
                 if ocr_result and ocr_result["texto"]:
                     decoded_text = ocr_result["texto"]
@@ -269,7 +261,7 @@ def main_image():
     # h = alto, w = ancho. `[:2]` = "las dos primeras dimensiones" (H, W).
     h, w = img.shape[:2]
     print(f"Imagen: {IMAGE_PATH} ({w}×{h})")
-
+   
     # ------------------------------------------------------------------
     # 2. Cargar Swin (etapa 1)
     # ------------------------------------------------------------------
@@ -337,7 +329,7 @@ def main_image():
     # ------------------------------------------------------------------
     print("\n[4/4] Cargando decodificador OCR (Fallback)")
     ocr_fallback = SwinCharOCRDecoder(
-        swin_proposer=swin, char_yolo_path=CHAR_YOLO_WEIGHTS, use_gpu=(DEVICE != "cpu")
+         char_yolo_path=CHAR_YOLO_WEIGHTS, use_gpu=(DEVICE != "cpu")
     )
     print("      ✓ Decodificador cargado")
 
@@ -420,7 +412,7 @@ def main_image():
         return
 
     # Guardar el panel visual de la etapa 1.
-    stage1 = draw_stage1(img, boxes, scores)
+    #stage1 = draw_stage1(img, boxes, scores)
     # log
     #cv2.imwrite(str(output_dir / "01_swin.png"), stage1)
 
@@ -446,7 +438,7 @@ def main_image():
             f"yolo={r['score']:.3f} swin={r['swin_score']:.3f} "
         )
 
-    stage2 = draw_stage2(img, refined)
+    #stage2 = draw_stage2(img, refined)
     #log
     #cv2.imwrite(str(output_dir / "02_yolo.png"), stage2)
 
@@ -519,10 +511,7 @@ def main_image():
 
             # Llamamos a la función de tu yolo_ocr.py
             ocr_res = ocr_fallback.process_barcode_region(
-                image=img,
-                swin_bbox=[exp_x1, exp_y1, exp_x2, exp_y2],  # Pasamos la caja expandida
-                swin_conf=r["score"],
-                swin_class=1,
+                image=crop_hires
             )
 
             if ocr_res and ocr_res["texto"]:
@@ -551,22 +540,10 @@ def main_image():
         else:
             print(f"  [{i}] ✗ no decode")
 
-    stage3 = draw_stage3(img, decoded)
+    #stage3 = draw_stage3(img, decoded)
     #log
-    cv2.imwrite(str(output_dir / "03_decoded.png"), stage3)
+    #cv2.imwrite(str(output_dir / "03_decoded.png"), stage3)
 
-    # ===================================================================
-    # Comparativa final: 4 paneles lado a lado
-    # ===================================================================
-    original_with_title = add_title(img.copy(), f"Original ({w}×{h})")
-
-    # `np.hstack` = apila horizontalmente. Resultado: original | swin |
-    # yolo | decoded, todo en una sola imagen.
-    composite = np.hstack([original_with_title, stage1, stage2, stage3])
-    #log
-    #out = output_dir / "00_comparativa.png"
-    #cv2.imwrite(str(out), composite)
-    #print(f"\n✓ Comparativa guardada en: {out}")
 
     # ===================================================================
     # Veredicto
@@ -625,7 +602,6 @@ def main_video():
         quiet_zone_ratio=0.30,
     )
     ocr_fallback = SwinCharOCRDecoder(
-        swin_proposer=swin,
         char_yolo_path=CHAR_YOLO_WEIGHTS,
         use_gpu=(DEVICE != "cpu"),
     )
