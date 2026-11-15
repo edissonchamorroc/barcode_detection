@@ -86,46 +86,34 @@ class BarcodeDecoder:
         """
         Determina si el ROI del código de barras es predominantemente azul, verde u otro.
         """
-        # 1. Convertir la imagen de BGR (OpenCV) a HSV
+        # Convertir la imagen de BGR (OpenCV) a HSV
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-        # 2. Definir los rangos de color
+        # Definir los rangos de color
         # Rango para el AZUL
         lower_blue = np.array([100, 50, 50])
         upper_blue = np.array([130, 255, 255])
 
-        # Rango para el VERDE
-        lower_green = np.array([40, 50, 50])
-        upper_green = np.array([80, 255, 255])
-
-        # 3. Crear máscaras (imágenes en blanco y negro donde el color seleccionado es blanco)
+        
+        #  Crear máscara
         mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
-        mask_green = cv2.inRange(hsv, lower_green, upper_green)
 
-        # 4. Contar cuántos píxeles son de cada color
+        # Contar cuántos píxeles son de cada color
         total_pixeles = img.shape[0] * img.shape[1]
         pixeles_azules = cv2.countNonZero(mask_blue)
-        pixeles_verdes = cv2.countNonZero(mask_green)
+        
 
-        # 5. Calcular porcentajes
+        # Calcular porcentaje
         porcentaje_azul = (pixeles_azules / total_pixeles) * 100
-        porcentaje_verde = (pixeles_verdes / total_pixeles) * 100
-
-        print(f"Porcentaje Azul: {porcentaje_azul:.2f}% | Porcentaje Verde: {porcentaje_verde:.2f}%")
-
-        # 6. Tomar una decisión (umbral del 15% de la imagen)
+        
+        # Tomar una decisión (umbral del 15% de la imagen)
         umbral = 15.0 
         
-        if porcentaje_azul > umbral and porcentaje_azul > porcentaje_verde:
+        if porcentaje_azul > umbral :
             return "Azul"
-        elif porcentaje_verde > umbral and porcentaje_verde > porcentaje_azul:
-            return "Verde"
         else:
             return "blanco"
 
-
-    # `@staticmethod` significa "esta función no necesita acceder a `self`".
-    # Es una utilidad genérica que podría existir fuera de la clase.
     @staticmethod
     def _to_gray(img: np.ndarray) -> np.ndarray:
         # `img.shape` nos dice el tamaño de la imagen.
@@ -266,11 +254,6 @@ class BarcodeDecoder:
             y las variantes de imagen generadas. La lista de lecturas queda vacía
             si no se pudo decodificar.
         """
-        # detecta color
-        #color = self.detectar_color_codigo(image)
-        # ----  Convertir a gris ----
-        #gray = self._to_gray(image)
-
         # ---- Generar variantes preprocesadas ----
         variants = self._preprocess_variants(image, i)
 
@@ -306,12 +289,7 @@ class BarcodeDecoder:
                         "polygon": [],
                     }
                 )
-                if all_hits:
-                    LOGGER.debug(
-                        "ZXing encontró %d código(s) usando la variante %s",
-                        len(all_hits),
-                        name,
-                    )
+                if all_hits:                
                     break
 
             if all_hits:
