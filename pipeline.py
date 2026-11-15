@@ -14,7 +14,7 @@ import torch  # PyTorch: tensores y redes neuronales.
 # --- Configuración ---
 # Rutas a los archivos de entrada. Si cambias de imagen o de pesos,
 # edita estas líneas.
-IMAGE_PATH = "dataset_prepared/yolo/images/test/prueba4.jpg"
+IMAGE_PATH = "dataset_prepared/yolo/images/test/Foto1_50cm.jpg"
 SWIN_WEIGHTS = "runs/swin_fcos/best.pt"
 YOLO_WEIGHTS = "runs/detect/runs/barcode/yolov5s_base/weights/best.pt"
 CBAM_WEIGHTS = "runs/detect/runs/barcode/yolov5s_cbam/weights/best.pt"
@@ -23,7 +23,7 @@ OUTPUT_DIR = "test_cascade_out"  # Carpeta donde se guardarán las imágenes.
 DEVICE = "cpu"  # "0" si tenés GPU local. (En GPU sería "0" o "cuda".)
 PROCESS_VIDEO = False  # True: procesa video; False: procesa una sola imagen.
 VIDEO_PATH = "video.mp4"
-VIDEO_OUTPUT_PATH = "video_resultado.mp4"
+VIDEO_OUTPUT_PATH = "Video_prueba50cm.mp4"
 
 # Imports del proyecto.
 # `sys.path.insert(0, "modules")` añade la carpeta "modules" al "buscador
