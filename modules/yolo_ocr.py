@@ -25,7 +25,7 @@ class SwinCharOCRDecoder:
     def _sort_boxes_left_to_right(self, boxes):
         return sorted(boxes, key=lambda b: (b[0] + b[2]) / 2.0)
     
-    def _deduplicate_char_boxes(self, boxes, iou_threshold=0.85):
+    def _deduplicate_char_boxes(self, boxes, iou_threshold=0.95):
         """
         Elimina cajas duplicadas basándose en un umbral de IoU alto.
         'boxes' es una lista de tuplas (x1, y1, x2, y2, conf).
@@ -85,7 +85,7 @@ class SwinCharOCRDecoder:
         region_id = self._debug_region_counter
 
         # YOLO detecta caracteres
-        char_results = self.char_yolo(roi, conf=0.25, iou=0.4, imgsz=1024, verbose=False)[0]
+        char_results = self.char_yolo(roi, conf=0.15, iou=0.7, imgsz=1024, verbose=False)[0]
         
         
         char_boxes = []
@@ -93,7 +93,7 @@ class SwinCharOCRDecoder:
             cx1, cy1, cx2, cy2 = map(int, box.xyxy[0].tolist())
             char_boxes.append((cx1, cy1, cx2, cy2, float(box.conf[0])))
         # Elimina cajas duplicadas
-        char_boxes = self._deduplicate_char_boxes(char_boxes, iou_threshold=0.85)
+        char_boxes = self._deduplicate_char_boxes(char_boxes, iou_threshold=0.95)
         # Organiza las cajas de izquierda a derecha
         sorted_boxes = self._sort_boxes_left_to_right(char_boxes)
         
@@ -134,22 +134,71 @@ class SwinCharOCRDecoder:
         
         for idx, cb in enumerate(sorted_boxes):
             lx1, ly1, lx2, ly2, yolo_conf = cb
-            char_crop = roi[ly1:ly2, lx1:lx2]
+
+            # Expandimos la caja un 15% para darle contexto a PaddleOCR
+            box_w = lx2 - lx1
+            box_h = ly2 - ly1
+            pad_x = int(box_w * 0.15)
+            pad_y = int(box_h * 0.15)
+            # Aseguramos que no nos salgamos de la imagen ROI
+            px1 = max(0, lx1 - pad_x)
+            py1 = max(0, ly1 - pad_y)
+            px2 = min(w, lx2 + pad_x)
+            py2 = min(h, ly2 + pad_y)
+
+            char_crop = roi[py1:py2, px1:px2]
             
             if char_crop.size == 0:
                 continue
+            # ========================================================
+            # ENDEREZAR CARÁCTER (DESKEW)
+            # ========================================================
+            # Convertimos a escala de grises para detectar el ángulo de la letra
+            gray = cv2.cvtColor(char_crop, cv2.COLOR_BGR2GRAY)
             
-            # PaddleOCR necesita que la imagen tenga un tamaño mínimo para leer bien.
-            # Si el recorte de la letra es muy pequeño, lo agrandamos.
-            ch, cw = char_crop.shape[:2]
-            if ch < 32 or cw < 32:
-                char_crop = cv2.resize(char_crop, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-
+            # Umbralizamos para aislar la letra del fondo
+            _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            
+            # Encontramos los contornos (la forma de la letra)
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if contours:
+                # Tomamos el contorno más grande (asumiendo que es la letra)
+                c = max(contours, key=cv2.contourArea)
+                rect = cv2.minAreaRect(c)
+                angle = rect[-1]
+                
+                # Ajustar el ángulo para que quede entre -45 y 45 grados
+                if angle < -45:
+                    angle = 90 + angle
+                elif angle > 45:
+                    angle = angle - 90
+                
+                # Si la letra está rotada más de 5 grados, la enderezamos
+                if abs(angle) > 5:
+                    (h_crop, w_crop) = char_crop.shape[:2]
+                    center = (w_crop // 2, h_crop // 2)
+                    # Creamos la matriz de rotación
+                    M = cv2.getRotationMatrix2D(center, angle, 1.0)
+                    # Rotamos la imagen
+                    char_crop = cv2.warpAffine(
+                        char_crop, M, (w_crop, h_crop), 
+                        flags=cv2.INTER_CUBIC, 
+                        borderMode=cv2.BORDER_REPLICATE # Rellena los bordes con el color del borde
+                    )
+            # ========================================================
+            target_h = 48
+            scale = target_h / max(char_crop.shape[0], 1)
+            target_w = max(1, int(char_crop.shape[1] * scale))
+            
+            # Redimensionar
+            char_resized = cv2.resize(char_crop, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+            
             #log
-            #bcv2.imwrite(str(output_dir / f"char_crop_{region_id:04d}_{idx:02d}.png"), char_crop)    
+            cv2.imwrite(str(output_dir / f"char_resized_{region_id:04d}_{idx:02d}.png"), char_resized)    
             # Inferencia con PaddleOCR v3.x
             # El método predict devuelve una lista de diccionarios con los resultados
-            rec_result = self.ocr_reader.predict(char_crop)
+            rec_result = self.ocr_reader.predict(char_resized)
             
             if rec_result and len(rec_result) > 0:
                 # En la versión 3.x, los textos y confianzas vienen en listas
@@ -158,7 +207,7 @@ class SwinCharOCRDecoder:
                     text = res['rec_texts'][0]
                     ocr_conf = res['rec_scores'][0]
                     
-                    if text.strip() and ocr_conf > 0.1:
+                    if text.strip() and ocr_conf > 0.4:
                         decoded_chars.append(text.strip())
 
         full_text = "".join(decoded_chars)
