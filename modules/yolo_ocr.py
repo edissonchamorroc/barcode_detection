@@ -72,7 +72,7 @@ class SwinCharOCRDecoder:
         iou = inter_area / float(box_a_area + box_b_area - inter_area)
         return iou
 
-    def process_barcode_region(self, image, bottom_ratio=0.40):
+    def process_barcode_region(self, image, bottom_ratio=0.32):
         total_start = time.perf_counter()
         timings = []
         region_id = self._debug_region_counter
