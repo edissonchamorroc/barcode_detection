@@ -223,13 +223,13 @@ class BarcodeDecoder:
             # log
             #cv2.imwrite(str(output_dir / f"variant_azul_{i}.png"), img)
         else:
-            imgBlanco = self._to_gray(img)
+           """  imgBlanco = self._to_gray(img)
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             clahe_img = clahe.apply(imgBlanco)
             _, otsu_on_clahe = cv2.threshold(
                 clahe_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
             )
-            variants["clahe+otsu"] = otsu_on_clahe
+            variants["clahe+otsu"] = otsu_on_clahe """
             # log
             #cv2.imwrite(str(output_dir / f"variant_clahe+otsu_{i}.png"), otsu_on_clahe)
 
