@@ -466,12 +466,21 @@ class YOLOv5CBAMRefiner:
 
                 # Iteramos cada detección dentro del crop.
                 for (x1c, y1c, x2c, y2c), conf in zip(xyxy, confs):
-                    # TRADUCCIÓN: sumamos el offset del crop (cx1, cy1)
+                    # sumamos el offset del crop (cx1, cy1)
                     # para volver a coordenadas de la imagen original.
                     x1o = cx1 + float(x1c)
                     y1o = cy1 + float(y1c)
                     x2o = cx1 + float(x2c)
                     y2o = cy1 + float(y2c)
+                    
+                    # ========================================================
+                    # FILTRO: Múltiples barcodes en una sola propuesta
+                    # ========================================================
+                    # Si YOLO detectó más de un código en el mismo recorte,
+                    # significa que Swin abarcó el espacio entre dos códigos.
+                    # Descartamos la propuesta completa para evitar procesar cortes.
+                    if len(xyxy) > 1:
+                        continue
 
                     # NUEVA ESTRATEGIA: 
                     # Si YOLO confirma que es un código de barras (conf > umbral),
