@@ -111,7 +111,7 @@ class SwinCharOCRDecoder:
 
         yolo_start = time.perf_counter()
         char_results = self.char_yolo(
-            roi, conf=0.15, iou=0.8, imgsz=1024, verbose=False
+            roi, conf=0.15, iou=0.2, imgsz=1024, verbose=False
         )[0]
         record_timing("Detección de caracteres (YOLO)", yolo_start)
 
@@ -136,6 +136,7 @@ class SwinCharOCRDecoder:
         sorted_boxes = self._sort_boxes_left_to_right(char_boxes)
         record_timing("Ordenamiento de caracteres", sort_start)
 
+        """  
         draw_start = time.perf_counter()
         roi_debug = roi.copy()
         for idx, (
@@ -176,7 +177,7 @@ class SwinCharOCRDecoder:
         if not cv2.imwrite(str(roi_debug_path), roi_debug):
             raise OSError(f"No se pudo guardar la imagen de depuracion: {roi_debug_path}")
         record_timing("Guardado de imagen de depuración", save_start)
-
+        """
         decode_start = time.perf_counter()
         decoded_chars = [box[5] for box in sorted_boxes]
         full_text = "".join(decoded_chars)
