@@ -11,6 +11,8 @@ Flujo:
 # ----------------------------------------------------------------------------
 
 # torch = PyTorch. La "caja de herramientas" estándar para redes neuronales.
+import time
+
 import torch
 
 # `torch.nn` = bloques prefabricados (capas convolucionales, etc.).
@@ -425,8 +427,36 @@ class YOLOv5CBAMRefiner:
             Lista de dicts con: box refinada (en coordenadas de la imagen
             ORIGINAL), score de YOLO, score de Swin, needs_sam.
         """
+        timings = []
+
+        def synchronize_device():
+            if (
+                torch.cuda.is_available()
+                and str(self.device).startswith("cuda")
+            ):
+                torch.cuda.synchronize()
+
+        def start_timer():
+            synchronize_device()
+            return time.perf_counter()
+
+        def record_timing(label, start):
+            synchronize_device()
+            timings.append((label, time.perf_counter() - start))
+
+        def print_timings(total_start):
+            for label, elapsed in timings:
+                print(f"  {label}: {elapsed:.3f} s")
+            print(
+                f"  Total YOLOv5CBAMRefiner.refine: "
+                f"{time.perf_counter() - total_start:.3f} s"
+            )
+
+        total_start = start_timer()
         # Si no hay propuestas, no hay nada que hacer.
         if len(proposals) == 0:
+            print("[Tiempos YOLO-CBAM]")
+            print_timings(total_start)
             return []
 
         results: List[Dict] = []
@@ -435,7 +465,9 @@ class YOLOv5CBAMRefiner:
         # `i` = índice de la propuesta.
         for i, (box, swin_score) in enumerate(zip(proposals, proposal_scores)):
             # Recortamos la zona de la propuesta (con margen extra).
+            crop_start = start_timer()
             crop, (cx1, cy1, cx2, cy2) = self._extract_crop(image, box)
+            record_timing(f"Recorte propuesta {i + 1}", crop_start)
 
             # Si el crop quedó vacío (caja inválida), saltamos.
             if crop.size == 0:
@@ -443,15 +475,18 @@ class YOLOv5CBAMRefiner:
 
             # Pasamos el CROP por YOLO. Ojo: YOLO predice coordenadas
             # RELATIVAS al crop, no a la imagen original.
+            predict_start = start_timer()
             detections = self.model.predict(
                 source=crop,
                 conf=self.conf_thresh,
                 iou=self.iou_thresh,
                 verbose=False,  # silenciar logs
             )
+            record_timing(f"Inferencia YOLO propuesta {i + 1}", predict_start)
 
             # `detections` es una lista (una por imagen del batch; aquí
             # batch=1). Recorremos cada resultado.
+            postprocess_start = start_timer()
             for det in detections:
                 # `det.boxes` contiene las cajas detectadas.
                 boxes = det.boxes
@@ -494,12 +529,19 @@ class YOLOv5CBAMRefiner:
                         "swin_score": float(swin_score),
                         "source_proposal_idx": i,
                     })
+            record_timing(
+                f"Postprocesamiento propuesta {i + 1}", postprocess_start
+            )
 
         # NMS global: como pueden venir cajas solapadas (de propuestas
         # distintas), las limpiamos.
         if results:
+            nms_start = start_timer()
             results = self._global_nms(results)
+            record_timing("NMS global", nms_start)
 
+        print("[Tiempos YOLO-CBAM]")
+        print_timings(total_start)
         return results
 
     # ======================================================================

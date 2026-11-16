@@ -11,6 +11,8 @@ Diseño:
 """
 
 
+import time
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -542,16 +544,48 @@ class SwinROIProposer(nn.Module):
         Nota: en modo detección, `boxes`, `scores`, `labels` son listas de
         tensores (una entrada por imagen del batch). Para B=1, se indexa [0].
         """
-        # Verificamos que las dimensiones cumplan con la restricción de Swin.
+        profile = not self.training
+        timings = []
+
+        def start_timer():
+            if not profile:
+                return None
+            if x.device.type == "cuda":
+                torch.cuda.synchronize(x.device)
+            return time.perf_counter()
+
+        def record_timing(label, start):
+            if profile:
+                if x.device.type == "cuda":
+                    torch.cuda.synchronize(x.device)
+                timings.append((label, time.perf_counter() - start))
+
+        def print_timings(total_start):
+            if not profile:
+                return
+            print("[Tiempos SwinROIProposer.forward]")
+            for label, elapsed in timings:
+                print(f"  {label}: {elapsed:.3f} s")
+            print(
+                f"  Total SwinROIProposer.forward: "
+                f"{time.perf_counter() - total_start:.3f} s"
+            )
+
+        total_start = start_timer()
+        stage_start = start_timer()
         self._validate_input(x)
+        record_timing("Validación de entrada", stage_start)
 
         # ---- 1. Backbone ----
         # `self.backbone(x)` devuelve una lista de feature maps, uno por
         # cada nivel que pedimos (out_indices=(1,2,3)).
+        stage_start = start_timer()
         features = self.backbone(x)  # lista [B, C_i, H_i, W_i] (o NHWC)
+        record_timing("Backbone Swin", stage_start)
 
         # ---- 2. Normalizar a NCHW ----
         # Swin devuelve NHWC; lo pasamos a NCHW (lo que espera el FPN).
+        stage_start = start_timer()
         features = self._to_nchw(features, self.out_channels)
 
         # ---- 3. FPN ----
@@ -559,11 +593,14 @@ class SwinROIProposer(nn.Module):
         # por eso lo construimos con un dict comprehension.
         # `enumerate(features)` da pares (índice, feature).
         feat_dict = {str(i): f for i, f in enumerate(features)}
+        record_timing("Conversión de features y preparación para FPN", stage_start)
 
         # Aplicamos el FPN. `fpn_out` es otro diccionario con la misma
         # estructura pero canales unificados (256) y con información
         # mezclada entre niveles.
+        stage_start = start_timer()
         fpn_out = self.fpn(feat_dict)
+        record_timing("FPN", stage_start)
 
         # Volvemos a lista (mismo orden que las claves 0,1,2...).
         fpn_features = list(fpn_out.values())
@@ -571,19 +608,27 @@ class SwinROIProposer(nn.Module):
         # Si el usuario solo quería las features (para el YOLO o debug),
         # devolvemos aquí.
         if return_features:
+            print_timings(total_start)
             return fpn_features
 
         # ---- 4. Head + decode ----
         # El cabezal FCOS predice logits, distancias y centerness por nivel.
+        stage_start = start_timer()
         cls_logits, reg_preds, cnt_preds = self.head(fpn_features)
+        record_timing("Cabezal FCOS", stage_start)
 
         # Calculamos el stride efectivo de cada nivel a partir del tamaño
         # real del feature map (no asumimos uno fijo).
+        stage_start = start_timer()
         strides = self._infer_strides(fpn_features, x.shape[-2:])
+        record_timing("Cálculo de strides", stage_start)
 
         # Convertimos todo a cajas reales.
+        stage_start = start_timer()
         boxes, scores, labels = self._decode(
             cls_logits, reg_preds, cnt_preds, strides, x.shape[-2:]
         )
+        record_timing("Decodificación FCOS y NMS", stage_start)
+        print_timings(total_start)
         return boxes, scores, labels
 
