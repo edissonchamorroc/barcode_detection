@@ -14,16 +14,16 @@ import torch  # PyTorch: tensores y redes neuronales.
 # --- Configuración ---
 # Rutas a los archivos de entrada. Si cambias de imagen o de pesos,
 # edita estas líneas.
-IMAGE_PATH = "dataset_prepared/yolo/images/test/Foto1_50cm.jpg"
+IMAGE_PATH = "dataset_prepared/yolo/images/test/Foto3_50cm.jpg"
 SWIN_WEIGHTS = "runs/swin_fcos/best.pt"
 YOLO_WEIGHTS = "runs/detect/runs/barcode/yolov5s_base/weights/best.pt"
 CBAM_WEIGHTS = "runs/detect/runs/barcode/yolov5s_cbam/weights/best.pt"
 CHAR_YOLO_WEIGHTS = "runs/char_detector/best.pt"
 OUTPUT_DIR = "test_cascade_out"  # Carpeta donde se guardarán las imágenes.
 DEVICE = "cpu"  # "0" si tenés GPU local. (En GPU sería "0" o "cuda".)
-PROCESS_VIDEO = False  # True: procesa video; False: procesa una sola imagen.
-VIDEO_PATH = "video.mp4"
-VIDEO_OUTPUT_PATH = "Video_prueba50cm.mp4"
+PROCESS_VIDEO = True  # True: procesa video; False: procesa una sola imagen.
+VIDEO_PATH = "Video_prueba50cm.mp4"
+VIDEO_OUTPUT_PATH = "Video_resultado.mp4"
 
 # Imports del proyecto.
 # `sys.path.insert(0, "modules")` añade la carpeta "modules" al "buscador
@@ -36,6 +36,10 @@ from swin_transformer import SwinROIProposer  # Etapa 1
 from yolo_cbam import YOLOv5CBAMRefiner  # Etapa 2
 from barcode_decoder import BarcodeDecoder  # Etapa 3 (lectura)
 from yolo_ocr import SwinCharOCRDecoder
+
+def _sync_device():
+    if DEVICE != "cpu" and torch.cuda.is_available():
+        torch.cuda.synchronize()
 
 
 # ===========================================================================
@@ -172,6 +176,7 @@ def process_video_frame(img, frame_number, swin, refiner, decoder, ocr_fallback)
     pipeline_start = time.perf_counter()
     print(f"\n--- Fotograma {frame_number} ({w}×{h}) ---")
 
+    stage1_start = time.perf_counter()
     proc_size = 512
     scale = min(proc_size / max(h, w), 1.0)
     new_w = max(32, (int(w * scale) // 32) * 32)
@@ -198,46 +203,78 @@ def process_video_frame(img, frame_number, swin, refiner, decoder, ocr_fallback)
     if new_h != h:
         boxes[:, 1::2] *= h / new_h
 
-    stage1 = draw_stage1(img, boxes, scores)
+    _sync_device()
+    print(f"Tiempo etapa 1 (Swin): {time.perf_counter() - stage1_start:.2f} s")
+
     if len(boxes) == 0:
         print("Swin no propuso regiones.")
-        stage2 = draw_stage2(img, [])
-        stage3 = draw_stage3(img, [])
+        print("Etapa 2 (YOLO-CBAM): omitida (sin propuestas)")
+        print("Etapa 3 (decodificación): omitida (sin propuestas)")
+        decoded = []
     else:
+        stage2_start = time.perf_counter()
         refined = refiner.refine(img, torch.from_numpy(boxes), torch.from_numpy(scores))
-        stage2 = draw_stage2(img, refined)
+        _sync_device()
+        print(
+            f"Tiempo etapa 2 (YOLO-CBAM): "
+            f"{time.perf_counter() - stage2_start:.2f} s"
+        )
+
+        stage3_start = time.perf_counter()
         decoded = []
         for i, result in enumerate(refined):
             x1, y1, x2, y2 = result["box"]
-            margin_x = int((x2 - x1) * 0.20)
-            margin_y = int((y2 - y1) * 0.20)
-            crop = img[
+            margin_x = int((x2 - x1) * 0.10)
+            margin_y = int((y2 - y1) * 0.10)
+            crop_hires = img[
                 max(0, int(y1) - margin_y) : min(h, int(y2) + margin_y),
                 max(0, int(x1) - margin_x) : min(w, int(x2) + margin_x),
             ]
-            hits, _variants = decoder.decode(crop, i=i)
+            hits, variants = decoder.decode(crop_hires, i=i)
             decoded_text = hits[0]["data"] if hits else None
+
             if decoded_text is None:
-                ocr_result = ocr_fallback.process_barcode_region(
-                    image=img
-                )
-                if ocr_result and ocr_result["texto"]:
-                    decoded_text = ocr_result["texto"]
+                for variant_name, variant_image in variants.items():
+                    if variant_image.ndim == 2:
+                        variant_image = cv2.cvtColor(
+                            variant_image, cv2.COLOR_GRAY2BGR
+                        )
+
+                    print(
+                        f"Fotograma {frame_number}, código {i}: "
+                        f"probando OCR ({variant_name})"
+                    )
+                    ocr_result = ocr_fallback.process_barcode_region(
+                        image=variant_image
+                    )
+                    if (
+                        ocr_result
+                        and ocr_result["texto"]
+                        and ocr_result["num_caracteres"] >= 10
+                    ):
+                        decoded_text = ocr_result["texto"]
+                        break
+
             decoded.append(
                 {
                     "source_box": result["box"],
                     "decoded": decoded_text,
                 }
             )
-        stage3 = draw_stage3(img, decoded)
+        _sync_device()
+        print(
+            f"Tiempo etapa 3 (decodificación/OCR): "
+            f"{time.perf_counter() - stage3_start:.2f} s"
+        )
 
-    composite = np.hstack(
-        [add_title(img.copy(), f"Original ({w}×{h})"), stage1, stage2, stage3]
-    )
+    stage3 = draw_stage3(img, decoded)
     elapsed = time.perf_counter() - pipeline_start
     print(f"Tiempo de procesamiento del fotograma: {elapsed:.2f} s")
-    return composite
-
+    print(
+        f"Códigos decodificados en fotograma {frame_number}: "
+        f"{sum(1 for result in decoded if result['decoded'])}/{len(decoded)}"
+    )
+    return stage3
 
 def main_image():
     # ------------------------------------------------------------------
@@ -343,6 +380,7 @@ def main_image():
     print("ETAPA 1: Swin propone ROI")
     print("=" * 60)
 
+    stage1_start = time.perf_counter()
     # ---- Preprocesar la imagen para el Swin ----
     # El Swin exige H y W múltiplos de 32. Calculamos una escala que
     # mantenga la proporción, y luego redondeamos al múltiplo de 32.
@@ -400,6 +438,10 @@ def main_image():
     if new_h != h:
         boxes[:, 1::2] *= h / new_h
 
+    _sync_device()
+    stage1_elapsed = time.perf_counter() - stage1_start
+    print(f"Tiempo etapa 1 (Swin): {stage1_elapsed:.2f} s")
+
     print(f"Propuestas de Swin: {len(boxes)}")
     for i, (box, score) in enumerate(zip(boxes, scores)):
         print(f"  [{i}] box={[round(v) for v in box]} score={score:.3f}")
@@ -407,13 +449,15 @@ def main_image():
     # Si Swin no propone nada, abortar (no tiene sentido seguir).
     if len(boxes) == 0:
         print("\n⚠ Swin no propuso nada. Revisar el umbral o el entrenamiento.")
+        print("Etapa 2 (YOLO-CBAM): omitida (sin propuestas)")
+        print("Etapa 3 (decodificación): omitida (sin propuestas)")
         elapsed = time.perf_counter() - pipeline_start
         print(f"Tiempo de procesamiento (etapa 1 hasta finalizar): {elapsed:.2f} s")
         return
 
     # Guardar el panel visual de la etapa 1.
+    #log
     #stage1 = draw_stage1(img, boxes, scores)
-    # log
     #cv2.imwrite(str(output_dir / "01_swin.png"), stage1)
 
     # ===================================================================
@@ -423,6 +467,7 @@ def main_image():
     print("ETAPA 2: YOLO-CBAM refina")
     print("=" * 60)
 
+    stage2_start = time.perf_counter()
     # `refiner.refine` recibe la imagen original + las cajas y scores de
     # Swin. Devuelve una lista de dicts con las cajas refinadas.
     # Nota: `torch.from_numpy(...)` convierte arrays numpy a tensores.
@@ -431,6 +476,10 @@ def main_image():
         torch.from_numpy(boxes),
         torch.from_numpy(scores),
     )
+    _sync_device()
+    stage2_elapsed = time.perf_counter() - stage2_start
+    print(f"Tiempo etapa 2 (YOLO-CBAM): {stage2_elapsed:.2f} s")
+
     print(f"Refinadas por YOLO-CBAM: {len(refined)}")
     for i, r in enumerate(refined):
         print(
@@ -453,17 +502,16 @@ def main_image():
     n_ok = 0
     n_ocr_fallback = 0
 
+    stage3_start = time.perf_counter()
     for i, r in enumerate(refined):
 
         x1, y1, x2, y2 = r["box"]
 
         # ---- Expandir la caja un 20% para dar "quiet zone" ----
-        # ZBar/zxing necesitan margen blanco alrededor del código.
-        # Sin ese margen, el decodificador falla aunque la caja sea perfecta.
         w_box = x2 - x1
         h_box = y2 - y1
-        margin_x = int(w_box * 0.20)
-        margin_y = int(h_box * 0.20)
+        margin_x = int(w_box * 0.10)
+        margin_y = int(h_box * 0.10)
 
         # `max(0, ...)` y `min(w/h, ...)` para no salir de la imagen.
         exp_x1 = max(0, int(x1) - margin_x)
@@ -472,9 +520,6 @@ def main_image():
         exp_y2 = min(h, int(y2) + margin_y)
 
         # ---- Recorte de ALTA RESOLUCIÓN ----
-        # A diferencia del decoder, aquí NO hacemos resize: usamos la
-        # imagen original. Más píxeles = mejor lectura de códigos
-        # pequeños.
         crop_hires = img[exp_y1:exp_y2, exp_x1:exp_x2]
         #log
         cv2.imwrite(str(output_dir / f"crop_hires_{i}.png"), crop_hires)
@@ -486,10 +531,10 @@ def main_image():
         if hits:
             # ---- Éxito directo ----
             n_ok += 1
-            print(f"  [{i}] ✓ Código decodificado: {decoded_text!r}")
+            print(f"✓ Código decodificado: {decoded_text!r}")
         else:
             # --- FALLBACK: INTENTO CON OCR ---
-            print(f"  [{i}] ✗ Código de barras falló. Intentando OCR...")
+            print(f"✗ Código de barras falló. Intentando OCR...")
 
             for variant_name, variant_image in variants.items():
                 if variant_image.ndim == 2:
@@ -510,10 +555,10 @@ def main_image():
                     decoded_text = ocr_res["texto"]
                     n_ok += 1
                     n_ocr_fallback += 1
-                    print(f"  [{i}] ✓ OCR ({variant_name}): {decoded_text!r}")
+                    print(f"✓ OCR ({variant_name}): {decoded_text!r}")
                     break
             else:
-                print(f"  [{i}] ✗ Decodificador y OCR fallaron.")
+                print(f"✗ Decodificador y OCR fallaron.")
 
         decoded.append(
             {
@@ -522,16 +567,18 @@ def main_image():
                 "variants": variants,
             }
         )
-        print(f"Decodificadas exitosamente: {n_ok}/{len(decoded)}")
-        print(f"  (De las cuales {n_ocr_fallback} fueron rescatadas por OCR)")
+       
 
     # ---- Resumen de la etapa 3 ----
+    _sync_device()
+    stage3_elapsed = time.perf_counter() - stage3_start
+    print(f"Tiempo etapa 3 (decodificación/OCR): {stage3_elapsed:.2f} s")
     print(f"Decodificadas: {n_ok}/{len(decoded)}")
     for i, r in enumerate(decoded):
         if r["decoded"]:
-            print(f"  [{i}] ✓ {r['decoded']!r}")
+            print(f"✓ {r['decoded']!r}")
         else:
-            print(f"  [{i}] ✗ no decode")
+            print(f"✗ no decode")
 
     #stage3 = draw_stage3(img, decoded)
     #log
@@ -570,51 +617,67 @@ def main_video():
     if not fps or fps <= 0:
         fps = 30.0
 
-    print(f"Cargando modelos para procesar el video: {VIDEO_PATH}")
-    swin = (
-        SwinROIProposer(
-            pretrained=False,
-            img_size=512,
-            num_classes=2,
-            score_thresh=0.05,
-        )
-        .to(DEVICE)
-        .eval()
-    )
-    swin.load_state_dict(torch.load(SWIN_WEIGHTS, map_location=DEVICE))
-    refiner = YOLOv5CBAMRefiner(
-        model_path=YOLO_WEIGHTS,
-        conf_thresh=0.25,
-        iou_thresh=0.45,
-        device=DEVICE,
-        inject_cbam=False,
-    )
-    decoder = BarcodeDecoder(
-        min_crop_size=200,
-        upscale_factor=3.0,
-        quiet_zone_ratio=0.30,
-    )
-    ocr_fallback = SwinCharOCRDecoder(
-        char_yolo_path=CHAR_YOLO_WEIGHTS,
-        use_gpu=(DEVICE != "cpu"),
-    )
-
     output_path = Path(VIDEO_OUTPUT_PATH)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     writer = None
     frame_count = 0
     processing_start = time.perf_counter()
+
     try:
+        print(f"Cargando modelos para procesar el video: {VIDEO_PATH}")
+        swin = (
+            SwinROIProposer(
+                pretrained=False,
+                img_size=512,
+                num_classes=2,
+                score_thresh=0.05,
+            )
+            .to(DEVICE)
+            .eval()
+        )
+        swin.load_state_dict(torch.load(SWIN_WEIGHTS, map_location=DEVICE))
+        refiner = YOLOv5CBAMRefiner(
+            model_path=YOLO_WEIGHTS,
+            conf_thresh=0.25,
+            iou_thresh=0.45,
+            device=DEVICE,
+            inject_cbam=False,
+        )
+        decoder = BarcodeDecoder(
+            min_crop_size=200,
+            upscale_factor=3.0,
+            quiet_zone_ratio=0.30,
+        )
+        ocr_fallback = SwinCharOCRDecoder(
+            char_yolo_path=CHAR_YOLO_WEIGHTS,
+            use_gpu=(DEVICE != "cpu"),
+        )
+
+        window_name = "Pipeline en vivo (q para salir)"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, 900, 900)
+
         while True:
             success, frame = capture.read()
             if not success:
                 break
 
+            frame_number = frame_count + 1
             composite = process_video_frame(
-                frame, frame_count + 1, swin, refiner, decoder, ocr_fallback
+                frame, frame_number, swin, refiner, decoder, ocr_fallback
             )
+
+            output_frame = composite
+            if output_frame.shape[1] > 1920:
+                scale = 1920 / output_frame.shape[1]
+                output_frame = cv2.resize(
+                    output_frame,
+                    (1920, max(1, int(output_frame.shape[0] * scale))),
+                    interpolation=cv2.INTER_AREA,
+                )
+
             if writer is None:
-                height, width = composite.shape[:2]
+                height, width = output_frame.shape[:2]
                 writer = cv2.VideoWriter(
                     str(output_path),
                     cv2.VideoWriter_fourcc(*"mp4v"),
@@ -624,12 +687,36 @@ def main_video():
                 if not writer.isOpened():
                     raise OSError(f"No se pudo crear el video de salida: {output_path}")
 
-            writer.write(composite)
+            writer.write(output_frame)
             frame_count += 1
+
+            frame_h, frame_w = composite.shape[:2]
+            scale = min(900 / frame_w, 900 / frame_h)
+            display_w = max(1, int(frame_w * scale))
+            display_h = max(1, int(frame_h * scale))
+            display_frame = cv2.resize(
+                composite,
+                (display_w, display_h),
+                interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR,
+            )
+            window_frame = np.zeros((900, 900, 3), dtype=composite.dtype)
+            x_offset = (900 - display_w) // 2
+            y_offset = (900 - display_h) // 2
+            window_frame[
+                y_offset : y_offset + display_h,
+                x_offset : x_offset + display_w,
+            ] = display_frame
+
+            cv2.imshow(window_name, window_frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                print("\n⏹ Detenido por el usuario.")
+                break
+
     finally:
         capture.release()
         if writer is not None:
             writer.release()
+        cv2.destroyAllWindows()
 
     if frame_count == 0:
         raise ValueError(f"El video no contiene fotogramas legibles: {VIDEO_PATH}")
