@@ -10,7 +10,7 @@ OUTPUT_DIR = "test_cascade_out"
 class SwinCharOCRDecoder:
     def __init__(self, char_yolo_path, use_gpu=True):
         self.char_yolo = YOLO(char_yolo_path)
-        
+        self.names = self.char_yolo.names
         # Inicializamos PaddleOCR en modo solo reconocimiento (sin detector de cajas)
         # Los parámetros use_doc... se ponen en False para que sea más rápido y no procese la imagen como documento
         self.ocr_reader = PaddleOCR(
@@ -80,28 +80,32 @@ class SwinCharOCRDecoder:
        
         if roi.size == 0:
             return None
+
         output_dir.mkdir(parents=True, exist_ok=True)
         self._debug_region_counter += 1
         region_id = self._debug_region_counter
 
         # YOLO detecta caracteres
-        char_results = self.char_yolo(roi, conf=0.15, iou=0.7, imgsz=1024, verbose=False)[0]
+        char_results = self.char_yolo(roi, conf=0.15, iou=0.8, imgsz=1024, verbose=False)[0]
         
         
         char_boxes = []
         for box in char_results.boxes:
             cx1, cy1, cx2, cy2 = map(int, box.xyxy[0].tolist())
-            char_boxes.append((cx1, cy1, cx2, cy2, float(box.conf[0])))
+            class_id = int(box.cls[0])
+            class_letter = self.names[class_id]
+            char_boxes.append((cx1, cy1, cx2, cy2, float(box.conf[0]), class_letter))
+        
         # Elimina cajas duplicadas
         char_boxes = self._deduplicate_char_boxes(char_boxes, iou_threshold=0.95)
         # Organiza las cajas de izquierda a derecha
         sorted_boxes = self._sort_boxes_left_to_right(char_boxes)
         
         roi_debug = roi.copy()
-        for idx, (cx1, cy1, cx2, cy2, yolo_conf) in enumerate(sorted_boxes):
+        for idx, (cx1, cy1, cx2, cy2, yolo_conf, class_letter) in enumerate(sorted_boxes):
             color = (0, 255, 0)
             cv2.rectangle(roi_debug, (cx1, cy1), (cx2, cy2), color, 2)
-            label = str(idx)
+            label = class_letter
             (text_w, text_h), _ = cv2.getTextSize(
                 label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
             )
@@ -127,90 +131,12 @@ class SwinCharOCRDecoder:
         if not cv2.imwrite(str(roi_debug_path), roi_debug):
             raise OSError(f"No se pudo guardar la imagen de depuracion: {roi_debug_path}")
   
-        if not char_boxes:
-            return None
-       
-        decoded_chars = []
         
-        for idx, cb in enumerate(sorted_boxes):
-            lx1, ly1, lx2, ly2, yolo_conf = cb
-
-            # Expandimos la caja un 15% para darle contexto a PaddleOCR
-            box_w = lx2 - lx1
-            box_h = ly2 - ly1
-            pad_x = int(box_w * 0.15)
-            pad_y = int(box_h * 0.15)
-            # Aseguramos que no nos salgamos de la imagen ROI
-            px1 = max(0, lx1 - pad_x)
-            py1 = max(0, ly1 - pad_y)
-            px2 = min(w, lx2 + pad_x)
-            py2 = min(h, ly2 + pad_y)
-
-            char_crop = roi[py1:py2, px1:px2]
-            
-            if char_crop.size == 0:
-                continue
-            # ========================================================
-            # ENDEREZAR CARÁCTER (DESKEW)
-            # ========================================================
-            # Convertimos a escala de grises para detectar el ángulo de la letra
-            gray = cv2.cvtColor(char_crop, cv2.COLOR_BGR2GRAY)
-            
-            # Umbralizamos para aislar la letra del fondo
-            _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-            
-            # Encontramos los contornos (la forma de la letra)
-            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            if contours:
-                # Tomamos el contorno más grande (asumiendo que es la letra)
-                c = max(contours, key=cv2.contourArea)
-                rect = cv2.minAreaRect(c)
-                angle = rect[-1]
-                
-                # Ajustar el ángulo para que quede entre -45 y 45 grados
-                if angle < -45:
-                    angle = 90 + angle
-                elif angle > 45:
-                    angle = angle - 90
-                
-                # Si la letra está rotada más de 5 grados, la enderezamos
-                if abs(angle) > 5:
-                    (h_crop, w_crop) = char_crop.shape[:2]
-                    center = (w_crop // 2, h_crop // 2)
-                    # Creamos la matriz de rotación
-                    M = cv2.getRotationMatrix2D(center, angle, 1.0)
-                    # Rotamos la imagen
-                    char_crop = cv2.warpAffine(
-                        char_crop, M, (w_crop, h_crop), 
-                        flags=cv2.INTER_CUBIC, 
-                        borderMode=cv2.BORDER_REPLICATE # Rellena los bordes con el color del borde
-                    )
-            # ========================================================
-            target_h = 48
-            scale = target_h / max(char_crop.shape[0], 1)
-            target_w = max(1, int(char_crop.shape[1] * scale))
-            
-            # Redimensionar
-            char_resized = cv2.resize(char_crop, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
-            
-            #log
-            cv2.imwrite(str(output_dir / f"char_resized_{region_id:04d}_{idx:02d}.png"), char_resized)    
-            # Inferencia con PaddleOCR v3.x
-            # El método predict devuelve una lista de diccionarios con los resultados
-            rec_result = self.ocr_reader.predict(char_resized)
-            
-            if rec_result and len(rec_result) > 0:
-                # En la versión 3.x, los textos y confianzas vienen en listas
-                res = rec_result[0]
-                if 'rec_texts' in res and len(res['rec_texts']) > 0:
-                    text = res['rec_texts'][0]
-                    ocr_conf = res['rec_scores'][0]
-                    
-                    if text.strip() and ocr_conf > 0.4:
-                        decoded_chars.append(text.strip())
-
+       
+        decoded_chars = [box[5] for box in sorted_boxes]
         full_text = "".join(decoded_chars)
+        
+        
         
         return {
             "texto": full_text,
