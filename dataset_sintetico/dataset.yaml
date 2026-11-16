@@ -1,7 +1,6 @@
 path: C:\Users\marce\Documents\Edisson\UdeA\vision_logistica\dataset_sintetico
 train: images/train
 val: images/val
-test: images/test
 names:
   0: '0'
   1: '1'
