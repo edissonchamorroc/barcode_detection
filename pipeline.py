@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 # --- Configuración ---
-IMAGE_PATH = "dataset_prepared/yolo/images/test/Foto3_50cm.jpg"
+IMAGE_PATH = "dataset_prepared/yolo/images/test/Foto2_50cm.jpg"
 YOLO_WEIGHTS = "runs/yolo_barcode/best.pt"
 CHAR_YOLO_WEIGHTS = "runs/char_detector/best.pt"
 OUTPUT_DIR = "test_cascade_out"
@@ -82,11 +82,22 @@ def process_and_decode(img, detector, decoder, ocr_fallback, tile_size=1024):
     Recibe una imagen, corre YOLO, recorta y decodifica/OCR.
     """
     pipeline_start = time.perf_counter()
-    h, w = img.shape[:2]
+    h_orig, w_orig = img.shape[:2]
+
+    # Reducir la imagen 4K para que YOLO para acelerar el proceso
+    MAX_DIM = 1280 
+    scale = 1.0
+    if max(h_orig, w_orig) > MAX_DIM:
+        scale = MAX_DIM / max(h_orig, w_orig)
+        new_w, new_h = int(w_orig * scale), int(h_orig * scale)
+        img_proc = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        print(f"📸 Imagen reducida de {w_orig}x{h_orig} a {new_w}x{new_h} para YOLO.")
+    else:
+        img_proc = img
 
     # 1. Detección con YOLO
     stage1_start = time.perf_counter()
-    detections = detector.detect(img, tile_size=tile_size)
+    detections = detector.detect(img_proc, tile_size=1280)
     _sync_device()
     print(f"Tiempo detección YOLO: {time.perf_counter() - stage1_start:.2f} s")
     
@@ -101,7 +112,11 @@ def process_and_decode(img, detector, decoder, ocr_fallback, tile_size=1024):
     
     stage2_start = time.perf_counter()
     for i, r in enumerate(detections):
-        x1, y1, x2, y2 = r["box"]
+        #Dividimos por 'scale' para volver a las coordenadas originales
+        x1 = r["box"][0] / scale
+        y1 = r["box"][1] / scale
+        x2 = r["box"][2] / scale
+        y2 = r["box"][3] / scale
         
         # Margen del 10%
         margin_x = int((x2 - x1) * 0.10)
@@ -109,8 +124,8 @@ def process_and_decode(img, detector, decoder, ocr_fallback, tile_size=1024):
         
         exp_x1 = max(0, int(x1) - margin_x)
         exp_y1 = max(0, int(y1) - margin_y)
-        exp_x2 = min(w, int(x2) + margin_x)
-        exp_y2 = min(h, int(y2) + margin_y)
+        exp_x2 = min(w_orig, int(x2) + margin_x)
+        exp_y2 = min(h_orig, int(y2) + margin_y)
 
         crop_hires = img[exp_y1:exp_y2, exp_x1:exp_x2]
         
@@ -137,7 +152,7 @@ def process_and_decode(img, detector, decoder, ocr_fallback, tile_size=1024):
                 print(f"✗ Decodificador y OCR fallaron.")
 
         decoded.append({
-            "source_box": r["box"],
+            "source_box":  [x1, y1, x2, y2],
             "decoded": decoded_text,
         })
 
@@ -170,7 +185,7 @@ def main_image():
     detector = YOLOv8BarcodeDetector(
         model_path=YOLO_WEIGHTS,
         conf_thresh=0.25,
-        iou_thresh=0.45,
+        iou_thresh=0.30,
         device=DEVICE,
     )
 

@@ -37,72 +37,99 @@ class YOLOv8BarcodeDetector:
 
     @torch.no_grad()
     def detect(self, image: np.ndarray, tile_size: int = 1024, overlap: float = 0.2) -> List[Dict]:
-            h_img, w_img = image.shape[:2]
-            step = int(tile_size * (1 - overlap))
-            
-            crops = []
-            offsets = []
+        h_img, w_img = image.shape[:2]
+        step = int(tile_size * (1 - overlap))
+        
+        crops = []
+        offsets = []
 
-            # Si la imagen es más chica que el parche, la procesamos directo
-            if h_img <= tile_size and w_img <= tile_size:
-                crops.append(image)
-                offsets.append((0, 0))
-            else:
-                # 1. Recopilar todos los parches en listas
-                for y in range(0, h_img, step):
-                    for x in range(0, w_img, step):
-                        x2 = min(x + tile_size, w_img)
-                        y2 = min(y + tile_size, h_img)
-                        x1 = max(0, x2 - tile_size)
-                        y1 = max(0, y2 - tile_size)
+        if h_img <= tile_size and w_img <= tile_size:
+            crops.append(image)
+            offsets.append((0, 0))
+        else:
+            for y in range(0, h_img, step):
+                for x in range(0, w_img, step):
+                    x2 = min(x + tile_size, w_img)
+                    y2 = min(y + tile_size, h_img)
+                    x1 = max(0, x2 - tile_size)
+                    y1 = max(0, y2 - tile_size)
 
-                        crop = image[y1:y2, x1:x2]
-                        crops.append(crop)
-                        offsets.append((x1, y1))
+                    crop = image[y1:y2, x1:x2]
+                    crops.append(crop)
+                    offsets.append((x1, y1))
 
-            # 2. Ejecutar YOLO pasándole la lista completa de parches de una sola vez
-            # (Ultralytics acepta una lista de imágenes numpy)
-            all_detections = self.model.predict(
-                source=crops,
-                conf=self.conf_thresh,
-                iou=self.iou_thresh,
-                verbose=False,
-            )
+        # Procesar en lotes de 4 para acelerar
+        all_detections = self.model.predict(
+            source=crops,
+            conf=self.conf_thresh,
+            iou=self.iou_thresh,
+            batch=4,
+            imgsz=1280,
+            verbose=False,
+        )
 
-            all_boxes = []
-            all_scores = []
+        all_boxes = []
+        all_scores = []
 
-            # 3. Traducir las coordenadas de todos los parches
-            for det, (offset_x, offset_y) in zip(all_detections, offsets):
-                boxes = det.boxes
-                if boxes is None or len(boxes) == 0:
-                    continue
-                    
-                xyxy = boxes.xyxy.cpu().numpy()
-                confs = boxes.conf.cpu().numpy()
+        for det, (offset_x, offset_y) in zip(all_detections, offsets):
+            boxes = det.boxes
+            if boxes is None or len(boxes) == 0:
+                continue
                 
-                for (x1, y1, x2, y2), conf in zip(xyxy, confs):
-                    all_boxes.append([float(x1 + offset_x), float(y1 + offset_y), 
-                                    float(x2 + offset_x), float(y2 + offset_y)])
-                    all_scores.append(float(conf))
-
-            # 4. NMS Global para eliminar duplicados
-            if not all_boxes:
-                return []
-
-            boxes_tensor = torch.tensor(all_boxes, dtype=torch.float32)
-            scores_tensor = torch.tensor(all_scores, dtype=torch.float32)
+            xyxy = boxes.xyxy.cpu().numpy()
+            confs = boxes.conf.cpu().numpy()
             
-            keep = nms(boxes_tensor, scores_tensor, self.iou_thresh)
-            
-            final_results = []
-            for idx in keep:
-                final_results.append({
-                    "box": all_boxes[idx],
-                    "score": float(all_scores[idx])
-                })
+            for (x1, y1, x2, y2), conf in zip(xyxy, confs):
+                all_boxes.append([float(x1 + offset_x), float(y1 + offset_y), 
+                                float(x2 + offset_x), float(y2 + offset_y)])
+                all_scores.append(float(conf))
+
+        if not all_boxes:
+            return []
+
+        boxes_tensor = torch.tensor(all_boxes, dtype=torch.float32)
+        scores_tensor = torch.tensor(all_scores, dtype=torch.float32)
+        
+        keep = nms(boxes_tensor, scores_tensor, self.iou_thresh)
+        
+        # --- FILTRO ANTI-CONTENCIÓN (Elimina cajas que están dentro de otras) ---
+        final_keep = []
+        for i in keep:
+            keep_i = True
+            for j in final_keep:
+                box_i = boxes_tensor[i]
+                box_j = boxes_tensor[j]
                 
-            return final_results
+                # Calcular área de intersección
+                xx1 = max(box_i[0], box_j[0])
+                yy1 = max(box_i[1], box_j[1])
+                xx2 = min(box_i[2], box_j[2])
+                yy2 = min(box_i[3], box_j[3])
+                
+                w_inter = max(0, xx2 - xx1)
+                h_inter = max(0, yy2 - yy1)
+                inter_area = w_inter * h_inter
+                
+                area_i = (box_i[2] - box_i[0]) * (box_i[3] - box_i[1])
+                area_j = (box_j[2] - box_j[0]) * (box_j[3] - box_j[1])
+                min_area = min(area_i, area_j)
+                
+                # Si la intersección cubre más del 70% de la caja más pequeña
+                if min_area > 0 and (inter_area / min_area) > 0.70:
+                    keep_i = False 
+                    break
+            
+            if keep_i:
+                final_keep.append(i)
+
+        final_results = []
+        for idx in final_keep:
+            final_results.append({
+                "box": all_boxes[idx],
+                "score": float(all_scores[idx])
+            })
+            
+        return final_results
 
     def _predict_single(self, img_patch, offset_x, offset_y):
         """Infiere en un solo parche y traduce las coordenadas al mapa original."""
