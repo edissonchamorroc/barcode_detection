@@ -24,5 +24,8 @@ htmlcov/
 *.code-workspace
 
 #videos o imagenes de prueba
-frames/
+*.jpg
+*.jpeg
+*.png
 *.mp4
+*.txt
