@@ -23,5 +23,6 @@ htmlcov/
 # Archivos de espacio de trabajo de VS Code
 *.code-workspace
 
-#videos
+#videos o imagenes de prueba
+frames/
 *.mp4
