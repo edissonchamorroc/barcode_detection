@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 # --- Configuración ---
-IMAGE_PATH = "dataset_prepared/yolo/images/test/Foto2_50cm.jpg"
+IMAGE_PATH = "test/Foto75cm.png"
 YOLO_WEIGHTS = "runs/yolo_barcode/best.pt"
 CHAR_YOLO_WEIGHTS = "runs/char_detector/best.pt"
 OUTPUT_DIR = "test_cascade_out"
@@ -58,11 +58,21 @@ def draw_decoded(image, decoded):
         label = r["decoded"] if ok else "no decode"
 
         cv2.rectangle(viz, (x1, y1), (x2, y2), color, 5)
-        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-        cv2.rectangle(viz, (x1, y1 - th - 6), (x1 + tw + 4, y1), color, -1)
+        font_scale = 0.8
+        font_thickness = 2
+        (tw, th), _ = cv2.getTextSize(
+            label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness
+        )
+        cv2.rectangle(
+            viz,
+            (x1, y1 - th - 10),
+            (x1 + tw + 8, y1),
+            color,
+            -1,
+        )
         cv2.putText(
             viz, label, (x1 + 2, y1 - 4),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
+            cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), font_thickness,
         )
         
     return add_title(
@@ -100,9 +110,20 @@ def process_and_decode(img, detector, decoder, ocr_fallback, tile_size=1024):
     detections = detector.detect(img_proc, tile_size=1280)
     _sync_device()
     print(f"Tiempo detección YOLO: {time.perf_counter() - stage1_start:.2f} s")
+
+    # Las coordenadas devueltas por YOLO corresponden a img_proc.
+    # Convertirlas a la resolución original antes de mostrar o guardar cajas
+    # sobre la imagen 4K.
+    detections_original = [
+        {
+            "box": [v / scale for v in r["box"]],
+            "score": r["score"],
+        }
+        for r in detections
+    ]
     
-    print(f"Códigos detectados: {len(detections)}")
-    for i, r in enumerate(detections):
+    print(f"Códigos detectados: {len(detections_original)}")
+    for i, r in enumerate(detections_original):
         print(f"  [{i}] box={[round(v) for v in r['box']]} yolo={r['score']:.3f}")
 
     # 2. Decodificación y OCR
@@ -163,7 +184,7 @@ def process_and_decode(img, detector, decoder, ocr_fallback, tile_size=1024):
     elapsed = time.perf_counter() - pipeline_start
     print(f"Tiempo TOTAL del frame: {elapsed:.2f} s\n")
     
-    return detections, decoded, n_ok
+    return detections_original, decoded, n_ok
 
 # ===========================================================================
 # MAIN: Imagen
@@ -207,14 +228,6 @@ def main_image():
     print("=" * 60)
     
     detections, decoded, n_ok = process_and_decode(img, detector, decoder, ocr_fallback)
-
-    # ===================================================================
-    # NUEVO: Guardar imagen con las cajas que detectó YOLO (antes de decodificar)
-    # ===================================================================
-    img_yolo = draw_detections(img, detections, title="YOLO: Barcodes Detectados")
-    path_yolo = output_dir / "01_yolo_detecciones.png"
-    cv2.imwrite(str(path_yolo), img_yolo)
-    print(f"🖼️  Imagen de detecciones de YOLO guardada en: {path_yolo}")
 
     # 4. Guardar imágenes finales
     final_img = draw_decoded(img, decoded)
