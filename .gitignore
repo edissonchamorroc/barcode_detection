@@ -6,7 +6,6 @@ env/
 # Resultados generados de pruebas en cascada
 test_cascade/
 test_cascade_out/
-runs/
 
 # Cache y archivos temporales de Python
 __pycache__/
