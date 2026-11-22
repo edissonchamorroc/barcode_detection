@@ -24,8 +24,6 @@ htmlcov/
 *.code-workspace
 
 #videos o imagenes de prueba
-*.jpg
-*.jpeg
-*.png
-*.mp4
-*.txt
+test/
+dataset_1024/
+
