@@ -82,37 +82,31 @@ class BarcodeDecoder:
     # ==================================================================
 
 
-    def detectar_color_codigo(self, img: np.ndarray):
+    def detectar_color_codigo(self, img: np.ndarray) -> str:
         """
         Determina si el ROI del código de barras es predominantemente azul, verde u otro.
         """
         # Convertir la imagen de BGR (OpenCV) a HSV
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-        # Definir los rangos de color
-        # Rango para el AZUL
+        # Definir los rangos de color en HSV.
         lower_blue = np.array([100, 50, 50])
         upper_blue = np.array([130, 255, 255])
+        lower_green = np.array([35, 40, 40])
+        upper_green = np.array([90, 255, 255])
 
-        
-        #  Crear máscara
         mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
-
-        # Contar cuántos píxeles son de cada color
+        mask_green = cv2.inRange(hsv, lower_green, upper_green)
         total_pixeles = img.shape[0] * img.shape[1]
         pixeles_azules = cv2.countNonZero(mask_blue)
-        
-
-        # Calcular porcentaje
+        pixeles_verdes = cv2.countNonZero(mask_green)
         porcentaje_azul = (pixeles_azules / total_pixeles) * 100
-        
-        # Tomar una decisión (umbral del 15% de la imagen)
+        porcentaje_verde = (pixeles_verdes / total_pixeles) * 100
+
         umbral = 15.0 
-        
-        if porcentaje_azul > umbral :
-            return "Azul"
-        else:
+        if max(porcentaje_azul, porcentaje_verde) <= umbral:
             return "blanco"
+        return "Azul" if porcentaje_azul > porcentaje_verde else "Verde"
 
     @staticmethod
     def _to_gray(img: np.ndarray) -> np.ndarray:
@@ -159,7 +153,9 @@ class BarcodeDecoder:
     # sí. Es como probar varias recetas hasta que una sale bien.
     # ==================================================================
 
-    def procesar_codigo_barras_azul(self, imagen_roi: np.ndarray) -> np.ndarray:
+    def procesar_codigo_barras_azul(
+        self, imagen_roi: np.ndarray
+    ) -> Optional[np.ndarray]:
         """
         Recibe el recorte de la imagen y devuelve una versión con fondo blanco 
         y barras negras perfectamente definidas.
@@ -178,7 +174,7 @@ class BarcodeDecoder:
         contornos, _ = cv2.findContours(mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         if not contornos:
-            return None, "No se encontró área azul"
+            return None
         
         # Asumimos que el contorno más grande es la etiqueta
         c = max(contornos, key=cv2.contourArea)
@@ -208,30 +204,50 @@ class BarcodeDecoder:
 
         return binaria_limpia
 
+    def procesar_codigo_barras_verde(
+        self, imagen_roi: np.ndarray
+    ) -> Optional[np.ndarray]:
+        """
+        Aísla la etiqueta verde y convierte sus barras y texto a negro sobre blanco.
+        """
+        hsv = cv2.cvtColor(imagen_roi, cv2.COLOR_BGR2HSV)
+        lower_green = np.array([35, 40, 40])
+        upper_green = np.array([90, 255, 255])
+        mask_green = cv2.inRange(hsv, lower_green, upper_green)
+
+        contornos, _ = cv2.findContours(
+            mask_green, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        if not contornos:
+            return None
+
+        x, y, w, h = cv2.boundingRect(max(contornos, key=cv2.contourArea))
+        roi = imagen_roi[y:y + h, x:x + w]
+        canal_v = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)[:, :, 2]
+
+        _, binaria_inv = cv2.threshold(
+            canal_v, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+        )
+        resultado = cv2.bitwise_not(binaria_inv)
+        kernel = np.ones((2, 2), np.uint8)
+        return cv2.morphologyEx(resultado, cv2.MORPH_CLOSE, kernel)
+
     def _preprocess_variants(self, img: np.ndarray, i: int) -> Dict[str, np.ndarray]:
         """
         Devuelve variantes de mejora.
         """
         output_dir = Path(OUTPUT_DIR)
         output_dir.mkdir(parents=True, exist_ok=True)
-        variants = {}
         color = self.detectar_color_codigo(img)
         variants = {"original": img}
         if color == "Azul":
-            imgAzul = self.procesar_codigo_barras_azul(img)
-            variants["azul"] = imgAzul
-            # log
-            #cv2.imwrite(str(output_dir / f"variant_azul_{i}.png"), img)
-        else:
-           """  imgBlanco = self._to_gray(img)
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            clahe_img = clahe.apply(imgBlanco)
-            _, otsu_on_clahe = cv2.threshold(
-                clahe_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-            )
-            variants["clahe+otsu"] = otsu_on_clahe """
-            # log
-            #cv2.imwrite(str(output_dir / f"variant_clahe+otsu_{i}.png"), otsu_on_clahe)
+            processed = self.procesar_codigo_barras_azul(img)
+            if processed is not None:
+                variants["azul"] = processed
+        elif color == "Verde":
+            processed = self.procesar_codigo_barras_verde(img)
+            if processed is not None:
+                variants["verde"] = processed
 
         return variants
 
