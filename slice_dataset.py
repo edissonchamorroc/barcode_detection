@@ -5,8 +5,8 @@ from pathlib import Path
 # --- CONFIGURACIÓN ---
 INPUT_IMAGES_DIR = Path("dataset/images") # Tus fotos 4K
 INPUT_LABELS_DIR = Path("dataset/labels") # Tus .txt
-OUTPUT_DIR = Path("dataset_1024")         # Carpeta nueva resultante
-TILE_SIZE = 1024
+OUTPUT_DIR = Path("dataset_640")         # Carpeta nueva resultante
+TILE_SIZE = 640
 OVERLAP = 0.2 # 20% de superposición
 
 def slice_dataset():
