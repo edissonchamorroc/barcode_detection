@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 # --- Configuración ---
-IMAGE_PATH = "test/Foto50cm.png"
+IMAGE_PATH = "test/Foto75cm.png"
 YOLO_WEIGHTS = "runs/yolo_barcode/best.pt"
 CHAR_YOLO_WEIGHTS = "runs/char_detector/best.pt"
 OUTPUT_DIR = "test_cascade_out"
@@ -105,6 +105,13 @@ def _report_background_failure(future, task_name):
 
 
 def _decode_crop_race(crop, decoder, ocr_fallback, index):
+    if decoder.detectar_color_codigo(crop) == "Verde":
+        decoder_future = _DECODER_EXECUTOR.submit(decoder.decode, crop, i=index)
+        hits, _ = decoder_future.result()
+        if hits:
+            return hits[0]["data"], "decoder", True
+        return None, None, True
+
     futures = {
         _DECODER_EXECUTOR.submit(decoder.decode, crop, i=index): "decoder",
         _OCR_EXECUTOR.submit(ocr_fallback.process_barcode_region, image=crop): "YOLO-OCR",
@@ -120,11 +127,11 @@ def _decode_crop_race(crop, decoder, ocr_fallback, index):
                 if task_name == "decoder":
                     hits, _ = result
                     if hits:
-                        return hits[0]["data"], task_name
-                elif result and result["texto"] and result["num_caracteres"] >= 10:
-                    return result["texto"], task_name
+                        return hits[0]["data"], task_name, False
+                elif result and result["texto"]:
+                    return result["texto"], task_name, False
 
-        return None, None
+        return None, None, False
     finally:
         for future, task_name in futures.items():
             if not future.cancel():
@@ -200,8 +207,8 @@ def process_and_decode(img, detector, decoder, ocr_fallback, tile_size=1024):
         exp_y2 = min(h_orig, int(y2) + margin_y)
 
         crop_hires = img[exp_y1:exp_y2, exp_x1:exp_x2]
-        
-        decoded_text, decoder_name = _decode_crop_race(
+        cv2.imwrite(f"{OUTPUT_DIR}/crop_{i}.jpg", crop_hires)
+        decoded_text, decoder_name, ocr_skipped = _decode_crop_race(
             crop_hires, decoder, ocr_fallback, i
         )
 
@@ -209,7 +216,10 @@ def process_and_decode(img, detector, decoder, ocr_fallback, tile_size=1024):
             n_ok += 1
             print(f"✓ Código decodificado con {decoder_name}: {decoded_text!r}")
         else:
-            print("✗ El decodificador y YOLO-OCR no lograron leer el código.")
+            if ocr_skipped:
+                print("✗ El decodificador no logró leer el código verde.")
+            else:
+                print("✗ El decodificador y YOLO-OCR no lograron leer el código.")
 
         decoded.append({
             "source_box":  [x1, y1, x2, y2],
