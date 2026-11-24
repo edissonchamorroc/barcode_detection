@@ -24,6 +24,6 @@ htmlcov/
 
 #videos o imagenes de prueba
 frames/
-dataset_1024/
+dataset_*
 test/
 
