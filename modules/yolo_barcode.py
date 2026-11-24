@@ -36,7 +36,7 @@ class YOLOv8BarcodeDetector:
         print(f"Detector YOLOv8 listo en {self.device}")
 
     @torch.no_grad()
-    def detect(self, image: np.ndarray, tile_size: int = 1024, overlap: float = 0.2) -> List[Dict]:
+    def detect(self, image: np.ndarray, tile_size: int = 640, overlap: float = 0.2) -> List[Dict]:
         h_img, w_img = image.shape[:2]
         step = int(tile_size * (1 - overlap))
         
@@ -64,7 +64,7 @@ class YOLOv8BarcodeDetector:
             conf=self.conf_thresh,
             iou=self.iou_thresh,
             batch=4,
-            imgsz=1280,
+            imgsz=640,
             verbose=False,
         )
 

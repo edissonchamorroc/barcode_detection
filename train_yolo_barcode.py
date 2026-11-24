@@ -20,7 +20,7 @@ import numpy as np
 @dataclass
 class Config:
     # --- Rutas ---
-    source_dir: str = "dataset_1024"                 # entrada: images/ + labels/
+    source_dir: str = "dataset_640"                 # entrada: images/ + labels/
     prepared_dir: str = "dataset_prepared"      # salida del preprocesamiento
     project_dir: str = "runs/yolo_barcode"  # salida del entrenamiento
 
@@ -31,10 +31,9 @@ class Config:
     force_prepare: bool = True
 
     # --- Entrenamiento general ---
-    # Usamos 1024 para no perder los códigos pequeños
-    imgsz: int = 1024 
-    batch: int = 8
-    device: str = "0" # En Colab usa "0"
+    imgsz: int = 640 
+    batch: int = 16
+    device: str = "0" 
 
     # --- Fase 1: Modelo Base ---
     run_base: bool = True
