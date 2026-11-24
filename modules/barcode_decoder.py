@@ -153,57 +153,6 @@ class BarcodeDecoder:
     # sí. Es como probar varias recetas hasta que una sale bien.
     # ==================================================================
 
-    def procesar_codigo_barras_azul(
-        self, imagen_roi: np.ndarray
-    ) -> Optional[np.ndarray]:
-        """
-        Recibe el recorte de la imagen y devuelve una versión con fondo blanco 
-        y barras negras perfectamente definidas.
-        """
-        #  Convertir a espacio de color HSV
-        hsv = cv2.cvtColor(imagen_roi, cv2.COLOR_BGR2HSV)
-
-        #  Definir el rango del color AZUL 
-        lower_blue = np.array([90, 50, 50])
-        upper_blue = np.array([130, 255, 255])
-
-        #  Crear la máscara: El fondo azul será blanco, lo demás negro
-        mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
-
-        # Encontrar el contorno más grande (la etiqueta azul)
-        contornos, _ = cv2.findContours(mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        if not contornos:
-            return None
-        
-        # Asumimos que el contorno más grande es la etiqueta
-        c = max(contornos, key=cv2.contourArea)
-        x, y, w, h = cv2.boundingRect(c)
-
-        # (Esto elimina el fondo de cartón ruidoso)
-        roi = imagen_roi[y:y+h, x:x+w]
-        
-        # Convertimos el recorte a HSV de nuevo
-        hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-
-        # Extraemos SOLO el canal V (Value / Brillo)
-        # En este canal, el azul se ve claro y el texto negro se ve oscuro.
-        canal_v = hsv_roi[:, :, 2]
-
-        # Aplicar Umbralización de Otsu
-        # Invertimos el resultado para que las letras/barras queden NEGRAS y el fondo BLANCO
-        _, binaria_inv = cv2.threshold(canal_v, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
-        # Invertimos el resultado final para que las barras/texto sean NEGROS y el fondo BLANCO
-        resultado_final = cv2.bitwise_not(binaria_inv)
-        
-        # Limpieza morfológica para hacer las barras más nítidas
-        # Si las barras se ven rotas, puedes usar una operación de cierre.
-        kernel = np.ones((2,2), np.uint8)
-        binaria_limpia = cv2.morphologyEx(resultado_final, cv2.MORPH_CLOSE, kernel)
-
-        return binaria_limpia
-
     def procesar_codigo_barras_verde(
         self, imagen_roi: np.ndarray
     ) -> Optional[np.ndarray]:
@@ -240,11 +189,7 @@ class BarcodeDecoder:
         output_dir.mkdir(parents=True, exist_ok=True)
         color = self.detectar_color_codigo(img)
         variants = {"original": img}
-        if color == "Azul":
-            processed = self.procesar_codigo_barras_azul(img)
-            if processed is not None:
-                variants["azul"] = processed
-        elif color == "Verde":
+        if color == "Verde":
             processed = self.procesar_codigo_barras_verde(img)
             if processed is not None:
                 variants["verde"] = processed
