@@ -104,44 +104,6 @@ class SwinCharOCRDecoder:
         # Organiza las cajas de izquierda a derecha
         sorted_boxes = self._sort_boxes_left_to_right(char_boxes)
 
-        """  
-        roi_debug = roi.copy()
-        for idx, (
-            cx1,
-            cy1,
-            cx2,
-            cy2,
-            yolo_conf,
-            class_letter,
-        ) in enumerate(sorted_boxes):
-            color = (0, 255, 0)
-            cv2.rectangle(roi_debug, (cx1, cy1), (cx2, cy2), color, 2)
-            label = class_letter
-            (text_w, text_h), _ = cv2.getTextSize(
-                label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
-            )
-            text_y = max(0, cy1 - text_h - 6)
-            cv2.rectangle(
-                roi_debug,
-                (cx1, text_y),
-                (cx1 + text_w + 4, text_y + text_h + 4),
-                color,
-                -1,
-            )
-            cv2.putText(
-                roi_debug,
-                label,
-                (cx1 + 2, text_y + text_h + 1),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 0, 0),
-                2,
-            )
-
-        roi_debug_path = output_dir / f"roi_chars_region_{region_id:04d}.png"
-        if not cv2.imwrite(str(roi_debug_path), roi_debug):
-            raise OSError(f"No se pudo guardar la imagen de depuracion: {roi_debug_path}")
-        """
         decoded_chars = [box[5] for box in sorted_boxes]
         full_text = "".join(decoded_chars)
 
