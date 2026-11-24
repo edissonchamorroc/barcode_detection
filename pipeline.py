@@ -4,12 +4,14 @@ import sys
 from pathlib import Path
 import shutil
 import time
+import logging
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import cv2
 import numpy as np
 import torch
 
 # --- Configuración ---
-IMAGE_PATH = "test/Foto75cm.png"
+IMAGE_PATH = "test/Foto50cm.png"
 YOLO_WEIGHTS = "runs/yolo_barcode/best.pt"
 CHAR_YOLO_WEIGHTS = "runs/char_detector/best.pt"
 OUTPUT_DIR = "test_cascade_out"
@@ -17,6 +19,10 @@ DEVICE = "cpu"  # Usamos CPU por ahora
 PROCESS_VIDEO = False
 VIDEO_PATH = "Video_prueba50cm.mp4"
 VIDEO_OUTPUT_PATH = "Video_resultado.mp4"
+LOGGER = logging.getLogger(__name__)
+
+_DECODER_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+_OCR_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 
 sys.path.insert(0, "modules")
 
@@ -58,20 +64,20 @@ def draw_decoded(image, decoded):
         label = r["decoded"] if ok else "no decode"
 
         cv2.rectangle(viz, (x1, y1), (x2, y2), color, 5)
-        font_scale = 0.8
-        font_thickness = 2
+        font_scale = 1.6
+        font_thickness = 4
         (tw, th), _ = cv2.getTextSize(
             label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness
         )
         cv2.rectangle(
             viz,
-            (x1, y1 - th - 10),
-            (x1 + tw + 8, y1),
+            (x1, y1 - th - 20),
+            (x1 + tw + 16, y1),
             color,
             -1,
         )
         cv2.putText(
-            viz, label, (x1 + 2, y1 - 4),
+            viz, label, (x1 + 4, y1 - 8),
             cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), font_thickness,
         )
         
@@ -84,6 +90,51 @@ def add_title(img, text):
     cv2.putText(bar, text, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
     return np.vstack([bar, img])
 
+
+def _report_background_failure(future, task_name):
+    if future.cancelled():
+        return
+
+    error = future.exception()
+    if error is not None:
+        LOGGER.error(
+            "La tarea paralela %s falló después de finalizar el crop.",
+            task_name,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+
+
+def _decode_crop_race(crop, decoder, ocr_fallback, index):
+    futures = {
+        _DECODER_EXECUTOR.submit(decoder.decode, crop, i=index): "decoder",
+        _OCR_EXECUTOR.submit(ocr_fallback.process_barcode_region, image=crop): "YOLO-OCR",
+    }
+
+    try:
+        while futures:
+            completed, _ = wait(futures, return_when=FIRST_COMPLETED)
+            for future in completed:
+                task_name = futures.pop(future)
+                result = future.result()
+
+                if task_name == "decoder":
+                    hits, _ = result
+                    if hits:
+                        return hits[0]["data"], task_name
+                elif result and result["texto"] and result["num_caracteres"] >= 10:
+                    return result["texto"], task_name
+
+        return None, None
+    finally:
+        for future, task_name in futures.items():
+            if not future.cancel():
+                future.add_done_callback(
+                    lambda completed, name=task_name: _report_background_failure(
+                        completed, name
+                    )
+                )
+
+
 # ===========================================================================
 # LÓGICA DE PROCESAMIENTO (Compartida entre imagen y video)
 # ===========================================================================
@@ -95,7 +146,7 @@ def process_and_decode(img, detector, decoder, ocr_fallback, tile_size=1024):
     h_orig, w_orig = img.shape[:2]
 
     # Reducir la imagen 4K para que YOLO para acelerar el proceso
-    MAX_DIM = 1280 
+    MAX_DIM = 640
     scale = 1.0
     if max(h_orig, w_orig) > MAX_DIM:
         scale = MAX_DIM / max(h_orig, w_orig)
@@ -107,7 +158,7 @@ def process_and_decode(img, detector, decoder, ocr_fallback, tile_size=1024):
 
     # 1. Detección con YOLO
     stage1_start = time.perf_counter()
-    detections = detector.detect(img_proc, tile_size=1280)
+    detections = detector.detect(img_proc, tile_size=640)
     _sync_device()
     print(f"Tiempo detección YOLO: {time.perf_counter() - stage1_start:.2f} s")
 
@@ -140,8 +191,8 @@ def process_and_decode(img, detector, decoder, ocr_fallback, tile_size=1024):
         y2 = r["box"][3] / scale
         
         # Margen del 10%
-        margin_x = int((x2 - x1) * 0.10)
-        margin_y = int((y2 - y1) * 0.10)
+        margin_x = int((x2 - x1) * 0.0)
+        margin_y = int((y2 - y1) * 0.0)
         
         exp_x1 = max(0, int(x1) - margin_x)
         exp_y1 = max(0, int(y1) - margin_y)
@@ -150,27 +201,15 @@ def process_and_decode(img, detector, decoder, ocr_fallback, tile_size=1024):
 
         crop_hires = img[exp_y1:exp_y2, exp_x1:exp_x2]
         
-        # Intento decodificar
-        hits, variants = decoder.decode(crop_hires, i=i)
-        decoded_text = hits[0]["data"] if hits else None
+        decoded_text, decoder_name = _decode_crop_race(
+            crop_hires, decoder, ocr_fallback, i
+        )
 
-        if hits:
+        if decoded_text:
             n_ok += 1
-            print(f"✓ Código decodificado: {decoded_text!r}")
+            print(f"✓ Código decodificado con {decoder_name}: {decoded_text!r}")
         else:
-            print(f"✗ Código de barras falló. Intentando OCR...")
-            for variant_name, variant_image in variants.items():
-                if variant_image.ndim == 2:
-                    variant_image = cv2.cvtColor(variant_image, cv2.COLOR_GRAY2BGR)
-
-                ocr_res = ocr_fallback.process_barcode_region(image=variant_image)
-                if ocr_res and ocr_res["texto"] and ocr_res["num_caracteres"] >= 10:
-                    decoded_text = ocr_res["texto"]
-                    n_ok += 1
-                    print(f"✓ OCR ({variant_name}): {decoded_text!r}")
-                    break
-            else:
-                print(f"✗ Decodificador y OCR fallaron.")
+            print("✗ El decodificador y YOLO-OCR no lograron leer el código.")
 
         decoded.append({
             "source_box":  [x1, y1, x2, y2],
