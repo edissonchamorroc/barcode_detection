@@ -16,9 +16,9 @@ YOLO_WEIGHTS = "runs/yolo_barcode/best.pt"
 CHAR_YOLO_WEIGHTS = "runs/char_detector/best.pt"
 OUTPUT_DIR = "test_cascade_out"
 DEVICE = "cpu"  # Usamos CPU por ahora
-PROCESS_VIDEO = False
-VIDEO_PATH = "Video_prueba50cm.mp4"
-VIDEO_OUTPUT_PATH = "Video_resultado.mp4"
+PROCESS_VIDEO = True
+VIDEO_PATH = "test/Video75cmframes.mp4"
+VIDEO_OUTPUT_PATH = "test/Video_resultado.mp4"
 LOGGER = logging.getLogger(__name__)
 
 _DECODER_EXECUTOR = ThreadPoolExecutor(max_workers=1)
@@ -207,7 +207,7 @@ def process_and_decode(img, detector, decoder, ocr_fallback, tile_size=1024):
         exp_y2 = min(h_orig, int(y2) + margin_y)
 
         crop_hires = img[exp_y1:exp_y2, exp_x1:exp_x2]
-        cv2.imwrite(f"{OUTPUT_DIR}/crop_{i}.jpg", crop_hires)
+        cv2.imwrite(f"{OUTPUT_DIR}/crop_{i+29}.jpg", crop_hires)
         decoded_text, decoder_name, ocr_skipped = _decode_crop_race(
             crop_hires, decoder, ocr_fallback, i
         )
@@ -307,7 +307,7 @@ def main_video():
 
     window_name = "Pipeline en vivo (q para salir)"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window_name, 900, 900)
+    cv2.resizeWindow(window_name, 900, 700)
 
     try:
         while True:
@@ -323,7 +323,7 @@ def main_video():
 
             # Ajustar tamaño para el visor
             frame_h, frame_w = composite.shape[:2]
-            scale = min(900 / frame_w, 900 / frame_h)
+            scale = min(900 / frame_w, 700 / frame_h)
             display_frame = cv2.resize(composite, (int(frame_w * scale), int(frame_h * scale)))
             
             # Guardar en video
