@@ -91,6 +91,109 @@ def add_title(img, text):
     return np.vstack([bar, img])
 
 
+class DecodedBarcodeCache:
+    def __init__(self, max_missed_frames=8):
+        self.max_missed_frames = max_missed_frames
+        self.tracks = []
+
+    @staticmethod
+    def _center(box):
+        return (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+
+    @staticmethod
+    def _predict_box(track, frame_number):
+        frames_since_seen = frame_number - track["last_seen"]
+        displacement_x = (track["velocity_x"] or 0.0) * frames_since_seen
+        x1, y1, x2, y2 = track["box"]
+        return [
+            x1 + displacement_x,
+            y1,
+            x2 + displacement_x,
+            y2,
+        ]
+
+    def match_detections(self, detections, frame_number):
+        possible_matches = []
+        for track_index, track in enumerate(self.tracks):
+            predicted_box = self._predict_box(track, frame_number)
+            predicted_x, predicted_y = self._center(predicted_box)
+            track_width = max(predicted_box[2] - predicted_box[0], 1.0)
+            track_height = max(predicted_box[3] - predicted_box[1], 1.0)
+            frames_since_seen = frame_number - track["last_seen"]
+            x_tolerance = (
+                max(2.0 * track_width, 40.0)
+                + abs(track["velocity_x"] or 0.0) * max(frames_since_seen - 1, 0)
+                + 0.5 * track_width * max(frames_since_seen - 1, 0)
+            )
+            y_tolerance = max(0.75 * track_height, 24.0)
+
+            for detection_index, detection in enumerate(detections):
+                detection_x, detection_y = self._center(detection["box"])
+                x_error = abs(detection_x - predicted_x)
+                y_error = abs(detection_y - predicted_y)
+                if x_error <= x_tolerance and y_error <= y_tolerance:
+                    cost = x_error / x_tolerance + y_error / y_tolerance
+                    possible_matches.append((cost, track_index, detection_index))
+
+        matched_tracks = set()
+        matched_detections = set()
+        cached_results = {}
+        for _, track_index, detection_index in sorted(possible_matches):
+            if track_index in matched_tracks or detection_index in matched_detections:
+                continue
+
+            track = self.tracks[track_index]
+            detection_box = detections[detection_index]["box"]
+            frames_since_seen = frame_number - track["last_seen"]
+            previous_x, _ = self._center(track["box"])
+            current_x, _ = self._center(detection_box)
+            observed_velocity = (current_x - previous_x) / frames_since_seen
+            if track["velocity_x"] is None:
+                track["velocity_x"] = observed_velocity
+            else:
+                track["velocity_x"] = (
+                    0.7 * track["velocity_x"] + 0.3 * observed_velocity
+                )
+
+            track["box"] = list(detection_box)
+            track["last_seen"] = frame_number
+            cached_results[detection_index] = track["decoded"]
+            matched_tracks.add(track_index)
+            matched_detections.add(detection_index)
+
+        predicted_results = []
+        active_tracks = []
+        for track_index, track in enumerate(self.tracks):
+            if track_index in matched_tracks:
+                active_tracks.append(track)
+                continue
+
+            missed_frames = frame_number - track["last_seen"]
+            if missed_frames > self.max_missed_frames:
+                continue
+
+            active_tracks.append(track)
+            predicted_results.append(
+                {
+                    "source_box": self._predict_box(track, frame_number),
+                    "decoded": track["decoded"],
+                }
+            )
+
+        self.tracks = active_tracks
+        return cached_results, predicted_results
+
+    def add(self, box, decoded, frame_number):
+        self.tracks.append(
+            {
+                "box": list(box),
+                "decoded": decoded,
+                "last_seen": frame_number,
+                "velocity_x": None,
+            }
+        )
+
+
 def _report_background_failure(future, task_name):
     if future.cancelled():
         return
@@ -145,7 +248,15 @@ def _decode_crop_race(crop, decoder, ocr_fallback, index):
 # ===========================================================================
 # LÓGICA DE PROCESAMIENTO (Compartida entre imagen y video)
 # ===========================================================================
-def process_and_decode(img, detector, decoder, ocr_fallback, tile_size=1024):
+def process_and_decode(
+    img,
+    detector,
+    decoder,
+    ocr_fallback,
+    tile_size=1024,
+    decoded_cache=None,
+    frame_number=0,
+):
     """
     Recibe una imagen, corre YOLO, recorta y decodifica/OCR.
     """
@@ -179,6 +290,12 @@ def process_and_decode(img, detector, decoder, ocr_fallback, tile_size=1024):
         }
         for r in detections
     ]
+    cached_results = {}
+    predicted_results = []
+    if decoded_cache is not None:
+        cached_results, predicted_results = decoded_cache.match_detections(
+            detections_original, frame_number
+        )
     
     print(f"Códigos detectados: {len(detections_original)}")
     for i, r in enumerate(detections_original):
@@ -206,25 +323,36 @@ def process_and_decode(img, detector, decoder, ocr_fallback, tile_size=1024):
         exp_x2 = min(w_orig, int(x2) + margin_x)
         exp_y2 = min(h_orig, int(y2) + margin_y)
 
-        crop_hires = img[exp_y1:exp_y2, exp_x1:exp_x2]
-        cv2.imwrite(f"{OUTPUT_DIR}/crop_{i+29}.jpg", crop_hires)
-        decoded_text, decoder_name, ocr_skipped = _decode_crop_race(
-            crop_hires, decoder, ocr_fallback, i
-        )
-
-        if decoded_text:
+        if i in cached_results:
+            decoded_text = cached_results[i]
             n_ok += 1
-            print(f"✓ Código decodificado con {decoder_name}: {decoded_text!r}")
+            print(f"✓ Código reutilizado desde cache: {decoded_text!r}")
         else:
-            if ocr_skipped:
-                print("✗ El decodificador no logró leer el código verde.")
+            crop_hires = img[exp_y1:exp_y2, exp_x1:exp_x2]
+            cv2.imwrite(f"{OUTPUT_DIR}/crop_{i+29}.jpg", crop_hires)
+            decoded_text, decoder_name, ocr_skipped = _decode_crop_race(
+                crop_hires, decoder, ocr_fallback, i
+            )
+
+            if decoded_text:
+                n_ok += 1
+                print(f"✓ Código decodificado con {decoder_name}: {decoded_text!r}")
+                if decoded_cache is not None:
+                    decoded_cache.add(
+                        [x1, y1, x2, y2], decoded_text, frame_number
+                    )
             else:
-                print("✗ El decodificador y YOLO-OCR no lograron leer el código.")
+                if ocr_skipped:
+                    print("✗ El decodificador no logró leer el código verde.")
+                else:
+                    print("✗ El decodificador y YOLO-OCR no lograron leer el código.")
 
         decoded.append({
             "source_box":  [x1, y1, x2, y2],
             "decoded": decoded_text,
         })
+
+    decoded.extend(predicted_results)
 
     _sync_device()
     print(f"Tiempo decodificación/OCR: {time.perf_counter() - stage2_start:.2f} s")
@@ -304,6 +432,8 @@ def main_video():
     detector = YOLOv8BarcodeDetector(YOLO_WEIGHTS, device=DEVICE)
     decoder = BarcodeDecoder(min_crop_size=200, upscale_factor=3.0, quiet_zone_ratio=0.30)
     ocr_fallback = SwinCharOCRDecoder(char_yolo_path=CHAR_YOLO_WEIGHTS, use_gpu=False)
+    decoded_cache = DecodedBarcodeCache(max_missed_frames=2
+    )
 
     window_name = "Pipeline en vivo (q para salir)"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
@@ -318,7 +448,14 @@ def main_video():
             frame_number = frame_count + 1
             print(f"\n--- Fotograma {frame_number} ---")
             
-            _, decoded, _ = process_and_decode(frame, detector, decoder, ocr_fallback)
+            _, decoded, _ = process_and_decode(
+                frame,
+                detector,
+                decoder,
+                ocr_fallback,
+                decoded_cache=decoded_cache,
+                frame_number=frame_number,
+            )
             composite = draw_decoded(frame, decoded)
 
             # Ajustar tamaño para el visor
